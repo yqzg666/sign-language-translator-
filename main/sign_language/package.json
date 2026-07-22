@@ -1,0 +1,20 @@
+{
+  "name": "sign-language-ai-app",
+  "version": "1.0.0",
+  "description": "手语 AI 助手 APP 移动端前端（Vue 3 + Vite）",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.4",
+    "vite": "^5.2.0"
+  }
+}

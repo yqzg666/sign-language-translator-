@@ -1,0 +1,17 @@
+# 手语翻译系统 — Python 依赖
+# 安装: pip install -r requirements.txt
+
+torch>=2.0.0
+torchvision>=0.15.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+pillow>=10.0.0
+django>=5.0
+djangorestframework>=3.15
+django-cors-headers>=4.0
+sentence-transformers>=3.0
+imageio>=2.35.0
+imageio-ffmpeg>=0.6.0
+edge-tts>=6.0
+mutagen>=1.47
+vosk>=0.3.45

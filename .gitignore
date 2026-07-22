@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+*.egg
+
+# 虚拟环境
+.venv/
+
+# 前端依赖
+node_modules/
+
+# 数据库
+*.sqlite3
+
+# 环境变量
+.env
+
+# 模型权重（大文件，需单独下载）
+checkpoints/
+
+# 手语视频数据集（大文件，需单独下载）
+data/
+
+# Vosk 离线语音模型（启动时自动下载）
+vosk-model-*/
+
+# IDE 配置
+.idea/
+.vscode/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 构建产物
+dist/
+
+# 压缩包
+*.zip
