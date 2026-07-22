@@ -29,7 +29,7 @@ from .sentence_index import SentenceSearcher, _find_best_match_by_gloss, find_vi
 
 # ============ 配置 ============
 
-DEEPSEEK_API_KEY = "os.environ.get("DEEPSEEK_API_KEY", "")"
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 SIMILARITY_THRESHOLD = 0.75      # 阶段1 直接命中

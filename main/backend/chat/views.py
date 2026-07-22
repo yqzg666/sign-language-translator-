@@ -16,7 +16,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 # DeepSeek 配置（复用 text_to_sign 的密钥）
-DEEPSEEK_API_KEY = "os.environ.get("DEEPSEEK_API_KEY", "")"
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 

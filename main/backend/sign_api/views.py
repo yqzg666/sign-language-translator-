@@ -22,7 +22,7 @@ SRC_DIR = BASE_DIR / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 # DeepSeek API
-DEEPSEEK_API_KEY = "os.environ.get("DEEPSEEK_API_KEY", "")"
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 
