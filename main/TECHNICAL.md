@@ -330,3 +330,54 @@ python -m backend.text_to_sign.sentence_index
 ### 数据集
 
 项目原始数据 `ce_csl/` 与 `main/data/` 完全重复。系统仅使用 `main/data/` 作为唯一数据源。
+
+## 音色克隆（GPT-SoVITS）
+
+系统支持通过 GPT-SoVITS 实现零样本音色克隆，让配音使用用户自己的声音。
+
+### 架构
+
+```
+前端录制 → Django 后端 → GPT-SoVITS 服务（9880端口）→ 返回克隆语音
+                │
+                └→ 不可用时回退 edge-tts
+```
+
+### 组件
+
+| 组件 | 路径 | 说明 |
+|------|------|------|
+| 音色克隆 API 服务 | `../voice_clone_server/api_server.py` | Flask 服务，零样本音色克隆 |
+| 模型下载工具 | `../voice_clone_server/download_models.py` | 下载 GPT-SoVITS 预训练权重 |
+| 安装脚本 | `../voice_clone_server/setup.py` | 一键安装 + 下载 |
+| 前端语音库 | `VoiceLibrary.vue` | 录音 → 上传 → 选音色配音 |
+| 后端 API | `sign_api/views.py` | 音色管理 + dub-v2 配音接口 |
+
+### API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/voice/reference` | 上传参考音频 + 文本（multipart） |
+| GET | `/api/voice/references` | 列出已保存的参考音色 |
+| DELETE | `/api/voice/references/<name>` | 删除指定音色 |
+| POST | `/api/video/dub-v2` | v2 配音：支持 voice_name 参数使用克隆音色 |
+
+### 用户操作流程
+
+1. 进入侧边栏「语音库」
+2. 点击「录制」→ 对着麦克风说话（3-10 秒）
+3. 输入刚才说的文本（如"大家好，欢迎使用手语翻译系统"）
+4. 点击「上传并克隆」→ 参考音频保存到后端
+5. 在视频翻译 Tab 中，选择「中文」，系统自动使用该克隆音色合成配音
+6. 若 GPT-SoVITS 服务未启动，自动回退到 edge-tts
+
+### 部署要求
+
+- GPU: 推荐 6GB+ 显存（零样本推理约 4GB）
+- 模型文件（~2GB）：gsv-v2-final-pretrained-gpt + sovits
+- 安装：`cd voice_clone_server && python setup.py`
+
+### 启动
+
+音色克隆服务作为独立进程运行在 9880 端口，由 `start_all.bat` 自动启动。
+若服务未启动，配音功能自动回退到 edge-tts，不影响系统其他功能。

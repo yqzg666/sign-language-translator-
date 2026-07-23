@@ -16,3 +16,5 @@ edge-tts>=6.0
 mutagen>=1.47
 vosk>=0.3.45
 python-dotenv>=1.0.0
+requests>=2.31.0
+soundfile>=0.12

@@ -657,3 +657,268 @@ def serve_dub_audio(request, filename):
     resp["Content-Length"] = str(file_size)
     resp["Access-Control-Allow-Origin"] = "*"
     return resp
+
+
+# ─── 音色管理 ────────────────────────────────────────────────
+
+import uuid as uuid_mod
+from urllib.parse import quote
+
+VOICE_REF_DIR = BASE_DIR.parent / "voice_clone_server" / "ref_audio"
+CLONE_SERVER_URL = "http://127.0.0.1:9880"
+
+
+@api_view(["POST"])
+def upload_voice_reference(request):
+    """
+    上传参考音频用于音色克隆
+    POST /api/voice/reference (multipart)
+      audio:  音频文件（WAV/MP3）
+      text:   音频对应的文本内容
+      name:   音色名称（可选，自动生成）
+    """
+    audio_file = request.FILES.get("audio")
+    text = request.data.get("text", "").strip()
+    name = request.data.get("name", "").strip()
+
+    if not audio_file:
+        return Response({"error": "请上传音频文件"}, status=status.HTTP_400_BAD_REQUEST)
+    if not text:
+        return Response({"error": "请提供音频对应的文本内容"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not name:
+        name = f"voice_{uuid_mod.uuid4().hex[:6]}"
+
+    # 保存音频
+    voice_dir = VOICE_REF_DIR / name
+    voice_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(audio_file.name).suffix or ".wav"
+    audio_path = voice_dir / f"reference{ext}"
+    with open(audio_path, "wb") as f:
+        for chunk in audio_file.chunks():
+            f.write(chunk)
+
+    # 保存文本
+    with open(voice_dir / "transcript.txt", "w", encoding="utf-8") as f:
+        f.write(text)
+
+    # 尝试通知克隆服务器
+    _notify_clone_server(name)
+
+    return Response({
+        "success": True,
+        "name": name,
+        "ref_text": text,
+    })
+
+
+@api_view(["GET"])
+def list_voice_references(request):
+    """列出所有已保存的参考音色"""
+    voices = []
+    if not VOICE_REF_DIR.exists():
+        return Response({"voices": []})
+
+    for item in sorted(VOICE_REF_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not item.is_dir():
+            continue
+        audio_file = None
+        for ext in (".wav", ".mp3", ".m4a", ".ogg", ".webm"):
+            candidates = list(item.glob(f"*{ext}"))
+            if candidates:
+                audio_file = str(candidates[0])
+                break
+
+        transcript = ""
+        transcript_file = item / "transcript.txt"
+        if transcript_file.exists():
+            transcript = transcript_file.read_text(encoding="utf-8").strip()
+
+        if audio_file:
+            voices.append({
+                "name": item.name,
+                "ref_text": transcript,
+                "audio_url": f"/api/voice/audio/{item.name}/{Path(audio_file).name}",
+            })
+
+    return Response({"voices": voices})
+
+
+@api_view(["GET"])
+def serve_voice_audio(request, voice_name, filename):
+    """提供参考音频文件"""
+    audio_path = VOICE_REF_DIR / voice_name / filename
+    if not audio_path.exists():
+        raise Http404("音频文件不存在")
+
+    resp = FileResponse(open(audio_path, "rb"))
+    resp["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+
+@api_view(["DELETE"])
+def delete_voice_reference(request, voice_name):
+    """删除指定的参考音色"""
+    voice_dir = VOICE_REF_DIR / voice_name
+    if not voice_dir.exists():
+        return Response({"error": "音色不存在"}, status=status.HTTP_404_NOT_FOUND)
+
+    import shutil
+    shutil.rmtree(voice_dir)
+    return Response({"success": True})
+
+
+def _notify_clone_server(voice_name):
+    """通知克隆服务器有新参考音频（可选）"""
+    try:
+        req = Request(
+            f"{CLONE_SERVER_URL}/health",
+            method="GET",
+        )
+        with urlopen(req, timeout=2):
+            pass
+    except Exception:
+        pass  # 克隆服务器未启动不影响主流程
+
+
+@api_view(["POST"])
+def dub_video_v2(request):
+    """
+    配音合成 v2：支持音色克隆
+    POST /api/video/dub-v2  { text, language, voice_name? }
+    若 voice_name 存在且指向已上传的参考音频，使用 GPT-SoVITS 克隆该音色；
+    否则回退到原版 edge-tts。
+    """
+    text = request.data.get("text", "").strip()
+    language = request.data.get("language", "zh").strip()
+    voice_name = request.data.get("voice_name", "").strip()
+
+    if not text:
+        return Response({"error": "请提供配音文本"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 检查是否使用克隆音色
+    use_clone = False
+    ref_audio_path = None
+    ref_text = ""
+
+    if voice_name:
+        voice_dir = VOICE_REF_DIR / voice_name
+        if voice_dir.exists():
+            audio_files = list(voice_dir.glob("*.*"))
+            transcript_file = voice_dir / "transcript.txt"
+
+            for f in audio_files:
+                if f.suffix.lower() in (".wav", ".mp3", ".m4a"):
+                    ref_audio_path = str(f)
+                    break
+
+            if transcript_file.exists():
+                ref_text = transcript_file.read_text(encoding="utf-8").strip()
+
+            if ref_audio_path and ref_text:
+                use_clone = True
+
+    import hashlib
+    import time as time_mod
+    import asyncio
+
+    # 路径配置
+    from django.conf import settings as dj_settings
+
+    if use_clone:
+        # ===== 使用 GPT-SoVITS 音色克隆 =====
+        try:
+            import requests as http_requests
+
+            payload = {
+                "ref_audio_path": ref_audio_path,
+                "ref_text": ref_text,
+                "target_text": text,
+            }
+
+            resp = http_requests.post(
+                f"{CLONE_SERVER_URL}/clone",
+                json=payload,
+                timeout=60,
+            )
+            if resp.status_code == 200:
+                # 保存返回的音频
+                safe = hashlib.md5((text + "clone").encode()).hexdigest()[:12]
+                audio_name = f"clone_{safe}_{int(time_mod.time())}.wav"
+                audio_path = DUB_DIR / audio_name
+
+                with open(audio_path, "wb") as f:
+                    f.write(resp.content)
+
+                # 获取时长
+                duration = 0
+                try:
+                    import soundfile as sf
+                    info = sf.info(str(audio_path))
+                    duration = int(info.duration)
+                except Exception:
+                    import subprocess as sp
+                    try:
+                        result = sp.run(
+                            ["ffprobe", "-v", "error", "-show_entries",
+                             "format=duration", "-of",
+                             "default=noprint_wrappers=1:nokey=1",
+                             str(audio_path)],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        duration = int(float(result.stdout.strip()))
+                    except Exception:
+                        pass
+
+                audio_url = f"/api/video/dub-audio/{audio_name}"
+                return Response({
+                    "audio_url": audio_url,
+                    "duration": duration,
+                    "clone": True,
+                })
+        except Exception as e:
+            print(f"[dub_video_v2] 克隆失败，回退 edge-tts: {e}")
+            # 克隆失败，回退 edge-tts
+
+    # ===== 回退：使用 edge-tts =====
+    voice = _DUB_VOICES.get(language, "zh-CN-XiaoxiaoNeural")
+
+    # 跨语言翻译
+    target_text = text
+    if language != "zh":
+        lang_names = {"en": "英文", "yue": "粤语", "ja": "日语"}
+        lang_label = lang_names.get(language, language)
+        translate_prompt = f"将以下中文翻译成{lang_label}，只输出翻译结果：\n{text}"
+        try:
+            target_text = _call_deepseek(
+                translate_prompt,
+                f"翻译助手：将中文翻译成{lang_label}，只输出翻译结果。",
+                temperature=0.2, max_tokens=256,
+            )
+        except RuntimeError:
+            target_text = text
+
+    safe = hashlib.md5((target_text + language).encode()).hexdigest()[:12]
+    audio_name = f"dub_{safe}_{language}_{int(time_mod.time())}.mp3"
+    audio_path = DUB_DIR / audio_name
+
+    try:
+        import edge_tts
+        asyncio.run(edge_tts.Communicate(target_text, voice).save(str(audio_path)))
+    except Exception as e:
+        return Response({"error": f"语音合成失败: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    duration = 0
+    try:
+        from mutagen.mp3 import MP3
+        duration = int(MP3(str(audio_path)).info.length)
+    except Exception:
+        pass
+
+    audio_url = f"/api/video/dub-audio/{audio_name}"
+    return Response({
+        "audio_url": audio_url,
+        "duration": duration,
+        "clone": False,
+    })

@@ -198,17 +198,75 @@ export const videoApi = {
 }
 
 /* ==========================================================================
- * 语音库（暂未对接后端，保留 Mock）
+ * 语音库（已对接后端音色克隆）
  * ========================================================================== */
 export const voiceApi = {
+  /**
+   * 获取系统内置音色列表
+   */
   async listSystemVoices() {
     return { voices: ['声音 1', '声音 2', '声音 3'] }
   },
-  async saveCustomVoice(name, audio) {
-    return { id: 'v_' + Date.now(), name }
+
+  /**
+   * 上传参考音频用于音色克隆
+   * POST /api/voice/reference (multipart)
+   * @param {string} name 音色名称
+   * @param {Blob} audioBlob 录制的音频 WAV Blob
+   * @param {string} text 音频对应的文本内容
+   */
+  async saveCustomVoice(name, audioBlob, text) {
+    const token = localStorage.getItem('sl_token') || ''
+    const form = new FormData()
+    form.append('audio', audioBlob, 'recording.wav')
+    form.append('text', text || '')
+    form.append('name', name)
+    const res = await fetch(`${BASE_URL}/voice/reference`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: form
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || '上传失败')
+    return data
   },
-  async deleteCustomVoices(ids) {
-    return { success: true }
+
+  /**
+   * 获取已保存的参考音色列表
+   * GET /api/voice/references
+   */
+  async listCustomVoices() {
+    return request('GET', '/voice/references')
+  },
+
+  /**
+   * 删除指定参考音色
+   * DELETE /api/voice/references/{name}
+   * @param {string[]} names 音色名称数组
+   */
+  async deleteCustomVoices(names) {
+    // 逐个删除
+    const results = []
+    for (const name of names) {
+      try {
+        await request('DELETE', `/voice/references/${encodeURIComponent(name)}`)
+        results.push({ name, success: true })
+      } catch (e) {
+        results.push({ name, success: false, error: e.message })
+      }
+    }
+    return { success: true, results }
+  },
+
+  /**
+   * 使用克隆音色合成配音
+   * POST /api/video/dub-v2 { text, language, voice_name }
+   * @param {string} text 配音文本
+   * @param {string} language 语言
+   * @param {string} voiceName 克隆音色名称
+   */
+  async dubWithClone(text, language, voiceName) {
+    return request('POST', '/video/dub-v2', { text, language, voice_name: voiceName })
   }
 }
 

@@ -43,3 +43,9 @@ dist/
 
 # 日志
 *.log
+
+# 音色克隆服务
+voice_clone_server/venv/
+voice_clone_server/models/
+voice_clone_server/ref_audio/
+voice_clone_server/output/

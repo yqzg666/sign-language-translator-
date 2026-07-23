@@ -2,10 +2,10 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import SaveSheet from '@/components/ui/SaveSheet.vue'
-import FolderPicker from '@/components/materials/FolderPicker.vue'
+import FolderPicker from '@/components/ui/FolderPicker.vue'
 import { useAppStore } from '@/store/app'
 import { useMaterialsStore } from '@/store/materials'
-import { videoApi } from '@/api'
+import { videoApi, voiceApi } from '@/api'
 import { showToast } from '@/composables/useToast'
 
 const store = useAppStore()
@@ -43,6 +43,12 @@ const selectedLang = ref('zh')
 
 // 当前语音库选定的声音（中文配音时使用）
 const selectedVoice = computed(() => store.state.selectedVoice)
+
+// 判断当前选中音色是否为克隆音色（非系统内置）
+const isClonedVoice = computed(() => {
+  const v = store.state.selectedVoice
+  return v && !['声音 1', '声音 2', '声音 3'].includes(v)
+})
 
 /**
  * 获取语言中文名
@@ -155,11 +161,24 @@ async function compose() {
   audioPlaying.value = false
   audioCurrentTime.value = '0:00'
   try {
-    const res = await videoApi.dubVideo(translation.value, selectedLang.value)
-    audioUrl.value = res.audio_url || ''
-    audioDuration.value = res.duration || 0
-    dubbed.value = true
-    showToast(`已合成配音（${langLabel(selectedLang.value)}）`)
+    // 中文 + 克隆音色 → 使用 dub-v2 API
+    if (selectedLang.value === 'zh' && isClonedVoice.value) {
+      const res = await voiceApi.dubWithClone(
+        translation.value,
+        'zh',
+        selectedVoice.value
+      )
+      audioUrl.value = res.audio_url || ''
+      audioDuration.value = res.duration || 0
+      dubbed.value = true
+      showToast(`已合成配音（${selectedVoice.value} 克隆音色）`)
+    } else {
+      const res = await videoApi.dubVideo(translation.value, selectedLang.value)
+      audioUrl.value = res.audio_url || ''
+      audioDuration.value = res.duration || 0
+      dubbed.value = true
+      showToast(`已合成配音（${langLabel(selectedLang.value)}）`)
+    }
   } catch {
     showToast('合成失败，请重试')
   } finally {
@@ -315,7 +334,9 @@ onBeforeUnmount(() => {
       <p class="dub-hint">
         {{
           selectedLang === 'zh'
-            ? `中文将使用语音库选定声音：${selectedVoice}`
+            ? isClonedVoice
+              ? `中文将使用克隆音色「${selectedVoice}」合成`
+              : `中文将使用语音库声音：${selectedVoice}`
             : `将以 ${langLabel(selectedLang)} 生成配音`
         }}
       </p>
