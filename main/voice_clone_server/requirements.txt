@@ -1,0 +1,20 @@
+# 音色克隆代理服务 — Python 依赖
+# 安装: pip install -r requirements.txt
+
+# Web 框架
+flask>=3.0
+flask-cors>=4.0
+
+# HTTP 客户端
+requests>=2.31.0
+
+# 深度学习框架 (CUDA 加速)
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# 音频处理
+soundfile>=0.12
+librosa>=0.10
+
+# 数值计算
+numpy>=1.24

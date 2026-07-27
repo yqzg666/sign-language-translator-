@@ -1,0 +1,211 @@
+/* =========================================================
+   全局设计规范 - 手语 AI 助手 APP
+   色彩：蓝色渐变（常规）/ 黄色渐变（核心操作）
+        浅粉+浅蓝渐变背景 / 白色毛玻璃卡片
+   风格：大圆角、按压回弹、48px 触控、最大宽度 430px 竖屏
+   ========================================================= */
+
+:root {
+  /* 主色渐变 */
+  --gradient-blue: linear-gradient(130deg, #68aef7, #84c0ff);
+  --gradient-yellow: linear-gradient(130deg, #ffdd88, #ffebb5);
+  --gradient-bg: linear-gradient(135deg, #fff3f8, #e8f7ff);
+
+  /* 毛玻璃底色 */
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-bg-strong: rgba(255, 255, 255, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.9);
+  --glass-blur: 14px;
+
+  /* 文字 */
+  --text-primary: #485478;
+  --text-secondary: #8692b2;
+  --text-on-yellow: #5c4c20;
+
+  /* 圆角 / 间距 */
+  --radius-lg: 30px;
+  --radius-md: 20px;
+  --radius-sm: 14px;
+  --touch-target: 48px;
+
+  /* 阴影 */
+  --shadow-blue: 0 5px 14px rgba(90, 170, 245, 0.28);
+  --shadow-yellow: 0 5px 14px rgba(245, 200, 110, 0.35);
+  --shadow-card: 0 8px 24px rgba(120, 140, 180, 0.12);
+
+  /* 页面外层背景（430px 以外区域） */
+  --page-bg: #eef2f8;
+
+  /* 通用半透明白色表面（卡片内的小按钮、芯片等） */
+  --surface-bg: rgba(255, 255, 255, 0.6);
+  --surface-bg-strong: rgba(255, 255, 255, 0.7);
+
+  /* 安全区 */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* 明亮主题：更白更亮，弱化粉色调 */
+:root[data-theme='bright'] {
+  --gradient-bg: linear-gradient(135deg, #ffffff, #e6f3ff);
+  --glass-bg: rgba(255, 255, 255, 0.92);
+  --glass-bg-strong: rgba(255, 255, 255, 0.96);
+  --glass-border: rgba(255, 255, 255, 1);
+  --text-primary: #38435f;
+  --text-secondary: #6a7896;
+  --page-bg: #eaf3ff;
+  --surface-bg: rgba(255, 255, 255, 0.75);
+  --surface-bg-strong: rgba(255, 255, 255, 0.85);
+}
+
+/* 深色主题：深蓝夜色调，玻璃与文字反色 */
+:root[data-theme='dark'] {
+  --gradient-bg: linear-gradient(135deg, #1a2036, #2b3454);
+  --glass-bg: rgba(42, 52, 80, 0.74);
+  --glass-bg-strong: rgba(48, 60, 92, 0.86);
+  --glass-border: rgba(130, 150, 190, 0.22);
+  --text-primary: #e8eefb;
+  --text-secondary: #9fadc9;
+  --text-on-yellow: #3a2e12;
+  --page-bg: #121627;
+  --surface-bg: rgba(60, 74, 108, 0.5);
+  --surface-bg-strong: rgba(70, 84, 122, 0.6);
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.34);
+  --shadow-blue: 0 5px 14px rgba(80, 150, 230, 0.3);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  height: 100dvh;
+  font-family: system-ui, -apple-system, "Microsoft Yahei", "PingFang SC", sans-serif;
+  color: var(--text-primary);
+  background: var(--page-bg);
+  overflow: hidden;
+}
+
+#app {
+  width: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  height: 100dvh;
+  background: var(--gradient-bg);
+  position: relative;
+  overflow: hidden;
+}
+
+input,
+textarea,
+button {
+  font-family: inherit;
+  outline: none;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+/* 按钮按压回弹通用动画 */
+.btn-press {
+  transition: transform 0.22s cubic-bezier(0.2, 0, 0.2, 1),
+    box-shadow 0.22s cubic-bezier(0.2, 0, 0.2, 1),
+    opacity 0.22s ease;
+  cursor: pointer;
+}
+.btn-press:active {
+  transform: translateY(3px) scale(0.96);
+}
+
+/* 隐藏原生滚动条，使用自定义细滚动条 */
+.scroll-area {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 150, 200, 0.35) transparent;
+}
+.scroll-area::-webkit-scrollbar {
+  width: 4px;
+}
+.scroll-area::-webkit-scrollbar-thumb {
+  background: rgba(120, 150, 200, 0.35);
+  border-radius: 4px;
+}
+.scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 页面切换过渡 */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* 通用工具类 */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.touch-min {
+  min-height: var(--touch-target);
+  min-width: var(--touch-target);
+}
+
+/* =========================================================
+   深色主题下的表面反色覆盖
+   针对 scoped 组件中硬编码的半透明白色背景，统一替换为深色表面，
+   选择器加 :root[data-theme='dark'] 前缀以提升优先级覆盖 scoped 样式
+   ========================================================= */
+:root[data-theme='dark'] input,
+:root[data-theme='dark'] textarea {
+  background: var(--surface-bg-strong);
+  color: var(--text-primary);
+  border-color: var(--glass-border);
+}
+
+:root[data-theme='dark'] .voice-item,
+:root[data-theme='dark'] .lang-chip,
+:root[data-theme='dark'] .ctrl-btn,
+:root[data-theme='dark'] .sub-tab,
+:root[data-theme='dark'] .theme-item,
+:root[data-theme='dark'] .camera-placeholder,
+:root[data-theme='dark'] .empty-state,
+:root[data-theme='dark'] .nav-bar {
+  background: var(--surface-bg);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .nav-bar {
+  background: rgba(42, 52, 80, 0.6);
+  border-bottom-color: var(--glass-border);
+}
+
+:root[data-theme='dark'] .menu-item:active {
+  background: rgba(104, 174, 247, 0.2);
+}
+
+:root[data-theme='dark'] .tab-item.active {
+  background: rgba(104, 174, 247, 0.22);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .tab-item {
+  color: var(--text-secondary);
+}
