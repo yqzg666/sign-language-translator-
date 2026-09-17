@@ -49,3 +49,6 @@ voice_clone_server/venv/
 voice_clone_server/models/
 voice_clone_server/ref_audio/
 voice_clone_server/output/
+
+# 第三方项目 GPT-SoVITS（独立仓库且体积大，需单独部署）
+voice_clone_server/GPT-SoVITS/

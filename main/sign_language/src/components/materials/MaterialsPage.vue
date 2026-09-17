@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import FolderList from './FolderList.vue'
 import MaterialList from './MaterialList.vue'
 import { useMaterialsStore } from '@/store/materials'
@@ -12,12 +12,27 @@ const store = useMaterialsStore()
 const level = ref('folders')
 const currentFolderId = ref(null)
 
+// 挂载时从后端加载文件夹，保证刷新后数据恢复
+onMounted(async () => {
+  try {
+    await store.load()
+  } catch (e) {
+    console.error('加载素材文件夹失败', e)
+  }
+})
+
 /**
  * 进入某文件夹的素材列表，同步顶部标题为文件夹名
  * @param {string} id 文件夹 ID
  */
-function openFolder(id) {
+async function openFolder(id) {
   currentFolderId.value = id
+  // 先加载该文件夹的素材，再切换视图
+  try {
+    await store.ensureMaterials(id)
+  } catch (e) {
+    console.error('加载素材失败', e)
+  }
   level.value = 'materials'
   const f = store.getFolder(id)
   emit('title', f ? f.name : '素材列表')

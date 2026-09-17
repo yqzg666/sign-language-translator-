@@ -136,3 +136,125 @@ def history(request, record_id=None):
         "total_pages": total_pages,
         "results": page_items,
     })
+
+
+# ---------- materials (MaterialFolder / Material) ----------
+from .models import MaterialFolder, Material
+
+
+def _folder_json(f):
+    return {
+        "id": f.id,
+        "name": f.name,
+        "createdAt": f.created_at.isoformat()[:19] if f.created_at else "",
+        "materialsCount": f.materials.count(),
+    }
+
+
+def _material_json(m):
+    return {
+        "id": m.id,
+        "folderId": m.folder_id,
+        "type": m.type,
+        "name": m.name,
+        "content": m.content,
+        "url": m.url,
+        "createdAt": m.created_at.isoformat()[:19] if m.created_at else "",
+    }
+
+
+@api_view(["GET", "POST", "DELETE"])
+def material_folders(request, folder_id=None):
+    if request.method == "GET":
+        return Response({"folders": [_folder_json(f) for f in MaterialFolder.objects.all()]})
+    if request.method == "POST":
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response({"error": "folder name required"}, status=status.HTTP_400_BAD_REQUEST)
+        f = MaterialFolder.objects.create(name=name)
+        return Response(_folder_json(f), status=status.HTTP_201_CREATED)
+    ids = request.data.get("ids") or []
+    MaterialFolder.objects.filter(id__in=ids).delete()
+    return Response({"success": True})
+
+
+@api_view(["PATCH"])
+def material_folder_detail(request, folder_id):
+    f = MaterialFolder.objects.filter(id=folder_id).first()
+    if not f:
+        return Response({"error": "folder not found"}, status=status.HTTP_404_NOT_FOUND)
+    name = (request.data.get("name") or "").strip()
+    if name:
+        f.name = name
+        f.save()
+    return Response({"success": True})
+
+
+@api_view(["GET", "POST", "DELETE"])
+def materials(request):
+    if request.method == "GET":
+        folder_id = request.query_params.get("folder") or request.query_params.get("folderId")
+        qs = Material.objects.all()
+        if folder_id:
+            qs = qs.filter(folder_id=folder_id)
+        return Response({"materials": [_material_json(m) for m in qs]})
+    if request.method == "POST":
+        folder_id = request.data.get("folder_id") or request.data.get("folderId")
+        if not folder_id:
+            return Response({"error": "folder required"}, status=status.HTTP_400_BAD_REQUEST)
+        f = MaterialFolder.objects.filter(id=folder_id).first()
+        if not f:
+            return Response({"error": "folder not found"}, status=status.HTTP_404_NOT_FOUND)
+        m = Material.objects.create(folder=f, type=request.data.get("type", "text"), name=request.data.get("name", ""), content=request.data.get("content", ""), url=request.data.get("url", ""))
+        return Response(_material_json(m), status=status.HTTP_201_CREATED)
+    ids = request.data.get("ids") or []
+    Material.objects.filter(id__in=ids).delete()
+    return Response({"success": True})
+
+
+@api_view(["POST"])
+def material_upload(request):
+    folder_id = request.data.get("folder_id") or request.data.get("folderId")
+    f = MaterialFolder.objects.filter(id=folder_id).first()
+    if not f:
+        return Response({"error": "folder not found"}, status=status.HTTP_404_NOT_FOUND)
+    import os
+    import uuid
+    from django.conf import settings
+    file = request.FILES.get("file")
+    name = request.data.get("name") or (file.name if file else "")
+    url = ""
+    if file:
+        ext = os.path.splitext(file.name or "")[1] or ""
+        fname = uuid.uuid4().hex[:10] + ext
+        upload_dir = os.path.join(settings.MEDIA_ROOT, "materials")
+        os.makedirs(upload_dir, exist_ok=True)
+        with open(os.path.join(upload_dir, fname), "wb") as out:
+            for chunk in file.chunks():
+                out.write(chunk)
+        url = settings.MEDIA_URL + "materials/" + fname
+    m = Material.objects.create(folder=f, type=request.data.get("type", "file"), name=name, content="", url=url)
+    return Response(_material_json(m), status=status.HTTP_201_CREATED)
+
+
+@api_view(["PATCH"])
+def material_detail(request, material_id):
+    m = Material.objects.filter(id=material_id).first()
+    if not m:
+        return Response({"error": "material not found"}, status=status.HTTP_404_NOT_FOUND)
+    for k in ("name", "content", "type"):
+        if k in request.data:
+            setattr(m, k, request.data.get(k, getattr(m, k)))
+    m.save()
+    return Response({"success": True})
+
+
+@api_view(["POST"])
+def material_move(request):
+    ids = request.data.get("ids") or []
+    to = request.data.get("to_folder_id") or request.data.get("toFolderId")
+    f = MaterialFolder.objects.filter(id=to).first()
+    if not f:
+        return Response({"error": "target folder not found"}, status=status.HTTP_404_NOT_FOUND)
+    Material.objects.filter(id__in=ids).update(folder=f)
+    return Response({"success": True})

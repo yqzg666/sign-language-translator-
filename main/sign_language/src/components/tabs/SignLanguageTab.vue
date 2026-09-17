@@ -1,129 +1,19 @@
 <script setup>
-import { ref, onBeforeUnmount, nextTick } from 'vue'
+import { ref, onBeforeUnmount } from 'vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import SaveSheet from '@/components/ui/SaveSheet.vue'
 import FolderPicker from '@/components/materials/FolderPicker.vue'
 import { useMaterialsStore } from '@/store/materials'
-import { signApi, chatApi } from '@/api'
+import { chatApi } from '@/api'
 import { showToast } from '@/composables/useToast'
+import HistoryPanel from '@/components/history/HistoryPanel.vue'
+import MaterialsPage from '@/components/materials/MaterialsPage.vue'
 
 const materialsStore = useMaterialsStore()
 
 // 保存相关状态
 const saveSheetOpen = ref(false) // 保存选择面板
 const pickerOpen = ref(false) // 保存到素材的文件夹选择弹窗
-
-// ====== 双子标签切换 ======
-const subTab = ref('sign2voice') // sign2voice 手语转语音 / voice2sign 语音转手语
-
-// ====== 手语转语音：摄像头预览与录像识别 ======
-const videoEl = ref(null)
-let mediaStream = null
-const cameraReady = ref(false)
-
-// 录像相关
-const cameraRecording = ref(false)
-let cameraMediaRec = null
-let cameraRecChunks = []
-const recognizing = ref(false)
-
-/**
- * 启动摄像头预览，失败时显示占位
- * 注：网页环境调用 getUserMedia，原生 APP 中应替换为相机插件
- */
-async function startCamera() {
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user' },
-      audio: false
-    })
-    // 先设为 true 让 Vue 渲染出 <video> 元素
-    cameraReady.value = true
-    // 等待 DOM 更新
-    await nextTick()
-    if (videoEl.value) {
-      videoEl.value.srcObject = mediaStream
-    }
-  } catch (e) {
-    cameraReady.value = false
-    console.warn('[摄像头] 启动失败:', e.message)
-    showToast('摄像头不可用（IDE 环境限制），请用外部浏览器打开')
-  }
-}
-
-// 停止摄像头释放资源，并同步关闭状态与视频源
-function stopCamera() {
-  if (mediaStream) {
-    mediaStream.getTracks().forEach((t) => t.stop())
-    mediaStream = null
-  }
-  if (videoEl.value) {
-    videoEl.value.srcObject = null
-  }
-  cameraReady.value = false
-}
-
-/**
- * 切换摄像头开关：开启时启动预览，关闭时释放摄像头
- */
-async function toggleCamera() {
-  if (cameraReady.value) {
-    stopCamera()
-  } else {
-    await startCamera()
-  }
-}
-
-/**
- * 开始/停止录像识别
- */
-async function toggleRecord() {
-  if (cameraRecording.value) {
-    // 停止录像
-    cameraRecording.value = false
-    cameraMediaRec?.stop()
-  } else {
-    // 开始录像
-    recognizing.value = false
-    try {
-      // 复用摄像头 stream，仅录像无需额外请求音频
-      if (!mediaStream) {
-        showToast('请先开启摄像头')
-        return
-      }
-      // 使用 MediaRecorder 录制视频，无需音频
-      cameraMediaRec = new MediaRecorder(mediaStream, { mimeType: 'video/webm' })
-      cameraRecChunks = []
-      cameraMediaRec.ondataavailable = (e) => cameraRecChunks.push(e.data)
-      cameraMediaRec.onstop = () => {
-        // 录像结束后立即进行识别
-        startRecognition()
-      }
-      cameraMediaRec.start()
-      cameraRecording.value = true
-    } catch (e) {
-      showToast('录像启动失败')
-    }
-  }
-}
-
-/**
- * 手语识别：将录像 Blob 发送到后端识别
- */
-async function startRecognition() {
-  if (cameraRecChunks.length === 0) return
-  recognizing.value = true
-  const blob = new Blob(cameraRecChunks, { type: 'video/webm' })
-  try {
-    const data = await signApi.recognizeSign(blob)
-    const words = (data.words || []).map((w) => w.gloss || w).join(' ')
-    showToast('识别结果: ' + words)
-  } catch (e) {
-    showToast('识别失败: ' + (e.message || '请重试'))
-  } finally {
-    recognizing.value = false
-  }
-}
 
 // ====== 语音转手语视频 ======
 const voiceText = ref('') // 语音转文字后可编辑文本
@@ -276,6 +166,8 @@ async function generateVideo() {
               similarity: data.similarity || 0,
               method: data.method || '',
             }
+            // 生成成功后刷新历史记录
+            historyPanelRef.value?.load()
           }
           if (data.type === 'error') {
             showToast(data.error || '生成失败')
@@ -317,7 +209,6 @@ function onPickFolder(folderId) {
 
 // 生命周期
 onBeforeUnmount(() => {
-  stopCamera()
   if (audioCtx) {
     audioCtx.close()
     audioCtx = null
@@ -332,69 +223,17 @@ onBeforeUnmount(() => {
 <template>
   <div class="sign-tab">
 
-    <!-- 子标签切换 -->
-    <div class="sub-tabs">
-      <button
-        class="sub-tab btn-press"
-        :class="{ active: subTab === 'sign2voice' }"
-        @click="subTab = 'sign2voice'"
-      >
-        🤟 手语转语音
-      </button>
-      <button
-        class="sub-tab btn-press"
-        :class="{ active: subTab === 'voice2sign' }"
-        @click="subTab = 'voice2sign'"
-      >
-        🎙 语音转手语
-      </button>
-    </div>
-
-    <!-- 子标签：手语转语音 -->
-    <div v-if="subTab === 'sign2voice'" class="tab-content">
-      <!-- 摄像头预览区 -->
-      <div class="camera-section glass">
-        <div v-if="!cameraReady" class="camera-placeholder" @click="toggleCamera">
-          <p class="camera-icon">📷</p>
-          <p class="camera-text">点击开启摄像头</p>
-        </div>
-        <video v-else ref="videoEl" class="camera-video" autoplay playsinline muted></video>
-
-        <!-- 进度提示 -->
-        <div class="camera-hint" v-if="recognizing">
-          <span class="hint-spinner">⏳</span>
-          <span>正在识别手语...</span>
-        </div>
-      </div>
-
-      <!-- 操作按钮组 -->
-      <div class="camera-actions">
-        <BaseButton variant="yellow" size="sm" @click="toggleCamera">
-          {{ cameraReady ? '关闭摄像头' : '开启摄像头' }}
-        </BaseButton>
-        <BaseButton
-          variant="yellow"
-          size="sm"
-          :disabled="!cameraReady || recognizing"
-          @click="toggleRecord"
-        >
-          {{ cameraRecording ? '停止录像' : '开始录像' }}
-        </BaseButton>
-      </div>
-    </div>
-
-    <!-- 子标签：语音转手语 -->
-    <div v-if="subTab === 'voice2sign'" class="tab-content">
+    <!-- 语音转手语 -->
+    <div class="tab-content">
       <!-- 麦克风输入区域 -->
       <div class="mic-zone">
         <button
           class="mic-btn btn-press"
           :class="{ recording }"
+          style="background-image: url(/bg/mic.png)"
           @click="toggleMic"
           aria-label="语音输入"
-        >
-          <span class="mic-icon-inner">🎤</span>
-        </button>
+        ></button>
         <p class="mic-tip">{{ recording ? '正在录音...点击停止' : '点击麦克风开始说话' }}</p>
       </div>
 
@@ -443,7 +282,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="detail-row">
             <span class="detail-label">匹配度</span>
-            <span class="detail-value">{{ (videoInfo.similarity * 100).toFixed(1) }}%</span>
+            <span class="detail-value">{{ (videoInfo.method === 'stitch' ? 100 : videoInfo.similarity * 100).toFixed(1) }}%</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">检索方式</span>
@@ -455,6 +294,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <!-- 历史记录（沿用玻璃卡片风格，对接后端持久化） -->
+    <HistoryPanel ref="historyPanelRef" />
+
+    <!-- 我的素材（复用素材库，直接内嵌，让界面更充实） -->
+    <MaterialsPage />
 
     <!-- 保存选择面板 -->
     <SaveSheet
@@ -479,122 +324,45 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: var(--gap-md);
+  overflow-y: auto;
+  padding: 0 12px 12px;
 }
 
-/* 子标签切换 */
-.sub-tabs {
-  display: flex;
-  gap: 8px;
-  padding: 0 4px;
-}
-.sub-tab {
-  flex: 1;
-  padding: 14px 10px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.5);
-  border: 1px solid transparent;
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  transition: all var(--transition-fast);
-  cursor: pointer;
-  min-height: 52px;
-}
-.sub-tab.active {
-  background: var(--gradient-yellow);
-  color: var(--text-on-yellow);
-  border-color: transparent;
-}
-
-/* 手语转语音 */
+/* 语音转手语内容 */
 .tab-content {
-  flex: 1;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: var(--gap-md);
-  overflow-y: auto;
-}
-.camera-section {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 240px;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  position: relative;
-}
-.camera-placeholder {
-  cursor: pointer;
-  text-align: center;
-  padding: 40px 20px;
-}
-.camera-icon {
-  font-size: 48px;
-  margin: 0 0 8px;
-}
-.camera-text {
-  color: var(--text-secondary);
-  font-size: 14px;
-  margin: 0;
-}
-.camera-video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: var(--radius-lg);
-}
-.camera-hint {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
-  right: 12px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.hint-spinner {
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-.camera-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
+  padding: 16px 4px 12px;
 }
 
-/* 语音转手语 */
+/* 麦克风输入区 */
 .mic-zone {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 24px 0 8px;
+  padding: 6px 0 0;
 }
 .mic-btn {
   width: 72px;
   height: 72px;
   border-radius: 50%;
-  background: var(--gradient-yellow);
+  background-color: var(--gradient-yellow);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
   border: none;
-  font-size: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: all var(--transition-fast);
   box-shadow: var(--shadow-yellow);
+  overflow: hidden;
 }
 .mic-btn.recording {
-  background: var(--gradient-yellow);
   animation: mic-pulse 1.2s infinite;
 }
 @keyframes mic-pulse {

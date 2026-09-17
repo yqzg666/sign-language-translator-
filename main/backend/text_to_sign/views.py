@@ -149,33 +149,40 @@ def _deepseek_verify_match(user_input, matched_text, score):
     让 DeepSeek 判断匹配结果在语义上是否合理
     返回 (is_ok: bool, reason: str)
     """
-    prompt = f"""你是一个严格的语义匹配判断专家。判断下面两个句子的语义是否真正匹配：
+    prompt = f"""你是手语视频的语义匹配审核员，判断下面两句话的**实际意图**是否一致、能否用同一个手语视频来表达。
 
 用户输入: {user_input}
 视频库句子: {matched_text}
 相似度得分: {score:.2f}
 
-核心判断原则：两个句子是否在**实际意图**和**使用场景**上一致？
-- "几点了" vs "这都几点了" → ❌ 前者是中性问时间，后者是抱怨太晚
-- "多少钱" vs "怎么卖" → ✅ 都是问价格
-- "你叫什么" vs "你叫什么名字" → ✅ 意思完全一致
+判断标准（必须严格遵守）：
+1. 只有实际意图和使用场景真正一致，才判「是」。
+2. 字面相近但意图不同，一律判「否」，例如：
+   - "晚上吃什么"（问具体吃的内容） vs "今天晚上想吃点什么"（问想吃的意愿）→ 否
+   - "几点了"（中性问时间） vs "这都几点了"（抱怨太晚）→ 否
+   - "多少钱"（问价格） vs "怎么卖"（问售卖方式）→ 否
+3. 完全同义才判「是」，例如：
+   - "你叫什么" vs "你叫什么名字" → 是
+4. 拿不准、有歧义时，一律判「否」。宁可不匹配，也不能错配。
 
-要求：
-1. 意图匹配 → ✅ 是
-2. 意图不同 → ❌ 否
-3. 只输出判断结果，一行
-
-判断结果："""
+只输出一个字：是 或 否"""
 
     try:
         result = _call_deepseek(
             prompt,
-            "你是一个严格的语义匹配专家，判断两个句子的实际意图是否一致。特别注意区分字面相似但实际意图不同的表达。",
+            "你是手语视频语义匹配审核员，只判断两句话的实际意图是否一致。宁严勿松，宁可漏配不可错配。只输出一个字：是 或 否。",
             temperature=0.1,
-            max_tokens=64,
+            max_tokens=16,
         )
-        is_ok = result.startswith("✅") or result.startswith("是") or "是" in result[:3]
-        return is_ok, result
+        result = (result or "").strip()
+        # 拒绝信号优先（含"否/不/❌"），宁严勿松
+        if result.startswith("否") or result.startswith("不") or result.startswith("❌"):
+            return False, result
+        # 明确同意
+        if result.startswith("是") or result.startswith("✅"):
+            return True, result
+        # 无法明确判定时，从严拒绝
+        return False, result
     except RuntimeError:
         # DeepSeek 调用失败时，信任向量检索结果
         return True, "DeepSeek 不可用，信任向量检索"

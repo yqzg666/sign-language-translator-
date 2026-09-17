@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import SignLanguageTab from '@/components/tabs/SignLanguageTab.vue'
 import VideoTranslateTab from '@/components/tabs/VideoTranslateTab.vue'
 import AIClassroomTab from '@/components/tabs/AIClassroomTab.vue'
+import VocabTab from '@/components/tabs/VocabTab.vue'
 import SidebarPanel from '@/components/sidebar/SidebarPanel.vue'
 import VoiceLibrary from '@/components/sidebar/VoiceLibrary.vue'
 import AccountSettings from '@/components/sidebar/AccountSettings.vue'
@@ -14,12 +15,23 @@ import { useAppStore } from '@/store/app'
 
 const store = useAppStore()
 
-// 底部 Tab 配置：key / 标题 / 图标
+// 底部 Tab 配置：key / 标题 / 角色插画
 const tabs = [
-  { key: 'sign', title: '实时手语综合', icon: '👐' },
-  { key: 'video', title: '视频翻译配音', icon: '🎬' },
-  { key: 'classroom', title: '杏云同学', icon: '🎓' }
+  { key: 'sign', title: '实时手语综合', icon: '/bg/tab-sign.png?v=5' },
+  { key: 'video', title: '视频翻译配音', icon: '/bg/tab-video.png?v=5' },
+  { key: 'vocab', title: '手语斩', icon: '/bg/tab-vocab-icon.jpg?v=5' },
+  { key: 'classroom', title: '杏云同学', icon: '/bg/tab-classroom.png?v=5' }
 ]
+
+// 每个 Tab 对应的背景图（public/bg/ 下，居中偏下展示角色）
+const tabBgMap = {
+  sign: '/bg/tab-sign.jpg',
+  video: '/bg/tab-video.jpg',
+  vocab: '/bg/tab-vocab.jpg',
+  classroom: '/bg/tab-classroom.jpg'
+}
+// 当前 Tab 背景图 URL
+const currentBg = computed(() => tabBgMap[activeTab.value] || '')
 
 const activeTab = ref('sign') // 当前激活 Tab
 const sidebarOpen = ref(false) // 侧边栏开关
@@ -42,8 +54,8 @@ const currentTitle = computed(() => {
   return tabs.find((t) => t.key === activeTab.value)?.title || ''
 })
 
-// 仅 Tab1 显示侧边栏入口按钮
-const showSidebarBtn = computed(() => activeTab.value === 'sign' && !activeSubPage.value)
+// 仅 Tab1 / Tab2 显示侧边栏入口按钮
+const showSidebarBtn = computed(() => (activeTab.value === 'sign' || activeTab.value === 'video') && !activeSubPage.value)
 
 // 仅 Tab3 显示我的素材入口按钮（全局唯一入口）
 const showMaterialsBtn = computed(() => activeTab.value === 'classroom' && !activeSubPage.value)
@@ -156,29 +168,37 @@ function onMaterialsTitle(title) {
         <button
           v-if="showSidebarBtn"
           class="icon-btn btn-press"
+          :style="{ backgroundImage: 'url(/bg/avatar.png)', backgroundSize: 'cover', backgroundPosition: 'center' }"
           @click="openSidebar"
           aria-label="侧边栏"
-        >
-          ☰
-        </button>
+        ></button>
         <!-- 仅 Tab3 显示我的素材入口（全局唯一入口） -->
         <button
           v-else-if="showMaterialsBtn"
           class="icon-btn btn-press"
+          :style="{ backgroundImage: 'url(/bg/avatar.png)', backgroundSize: 'cover', backgroundPosition: 'center' }"
           @click="openMaterials"
           aria-label="我的素材"
-        >
-          📁
-        </button>
+        ></button>
       </div>
     </header>
 
     <!-- 内容区域：Tab 内容与子页面覆盖层 -->
     <main class="content">
-      <!-- Tab 内容区 -->
-      <div v-show="!activeSubPage" class="tab-content">
+      <!-- Tab 内容区（背景随当前 Tab 切换；叠白色蒙版降低底图浓度） -->
+      <div
+        v-show="!activeSubPage"
+        class="tab-content"
+        :style="{
+          backgroundImage: currentBg
+            ? `linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5)), url(${currentBg})`
+            : 'none',
+          backgroundPosition: activeTab === 'vocab' || activeTab === 'classroom' ? 'center 12%' : 'center bottom'
+        }"
+      >
         <SignLanguageTab v-show="activeTab === 'sign'" />
         <VideoTranslateTab v-show="activeTab === 'video'" />
+        <VocabTab v-show="activeTab === 'vocab'" />
         <AIClassroomTab v-show="activeTab === 'classroom'" />
       </div>
 
@@ -213,7 +233,7 @@ function onMaterialsTitle(title) {
         :class="{ active: activeTab === tab.key }"
         @click="switchTab(tab.key)"
       >
-        <span class="tab-icon">{{ tab.icon }}</span>
+        <img :src="tab.icon" class="tab-icon" alt="" />
         <span class="tab-label">{{ tab.title }}</span>
       </button>
     </nav>
@@ -269,7 +289,7 @@ function onMaterialsTitle(title) {
   -webkit-text-fill-color: transparent;
   color: transparent;
 }
-/* 图标按钮：蓝色色调圆圈 */
+/* 图标按钮：角色插画圆形 */
 .icon-btn {
   width: var(--touch-target);
   height: var(--touch-target);
@@ -277,20 +297,26 @@ function onMaterialsTitle(title) {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
-  color: #4a8fe0;
-  background: rgba(104, 174, 247, 0.16);
+  background: rgba(255, 255, 255, 0.7);
+  background-repeat: no-repeat;
+  border: 1px solid var(--glass-border);
+  overflow: hidden;
 }
 
 /* 内容区 */
 .content {
   flex: 1;
+  min-width: 0;
   position: relative;
   overflow: hidden;
 }
 .tab-content {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  background-repeat: no-repeat;
+  background-position: center bottom;
+  background-size: cover;
 }
 .sub-page {
   position: absolute;
@@ -337,7 +363,11 @@ function onMaterialsTitle(title) {
   background: rgba(104, 174, 247, 0.14);
 }
 .tab-icon {
-  font-size: 20px;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  object-fit: contain;
+  background: #fff;
 }
 .tab-label {
   font-size: 11px;

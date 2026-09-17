@@ -91,10 +91,18 @@ function onMaterialClick(m) {
   }
 }
 
-// 关闭文本编辑器
-function closeEditor() {
+// 关闭文本编辑器（将名称/内容改动持久化到后端）
+async function closeEditor() {
+  const m = editorMaterial.value
   editorVisible.value = false
   editorMaterial.value = null
+  if (!m) return
+  try {
+    if (m.name.trim()) await store.renameMaterial(props.folderId, m.id, m.name)
+    await store.updateTextMaterial(props.folderId, m.id, m.content || '')
+  } catch (e) {
+    console.error('保存素材失败', e)
+  }
 }
 
 /**
@@ -162,8 +170,8 @@ function doMove(toId) {
 }
 
 // 新建文本素材并直接打开编辑器
-function createText() {
-  const m = store.addTextMaterial(props.folderId, '新建文本', '')
+async function createText() {
+  const m = await store.addTextMaterial(props.folderId, '新建文本', '')
   if (m) {
     editorMaterial.value = m
     editorVisible.value = true
@@ -178,11 +186,14 @@ function triggerUpload(type) {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = type === 'image' ? 'image/*' : 'video/*'
-  input.onchange = (e) => {
+  input.onchange = async (e) => {
     const file = e.target.files[0]
     if (!file) return
-    const url = URL.createObjectURL(file)
-    store.addMediaMaterial(props.folderId, type, file.name.replace(/\.[^.]+$/, ''), url)
+    try {
+      await store.addMediaMaterial(props.folderId, type, file.name.replace(/\.[^.]+$/, ''), file)
+    } catch (err) {
+      console.error('上传素材失败', err)
+    }
   }
   input.click()
 }
@@ -339,7 +350,7 @@ function typeIcon(type) {
               @click="doMove(f.id)"
             >
               📁 {{ f.name }}
-              <span class="move-count">{{ f.materials.length }}</span>
+              <span class="move-count">{{ f.materialsCount ?? f.materials.length }}</span>
             </button>
           </div>
           <p v-else class="confirm-desc">没有其他可移动的文件夹，请先新建。</p>
@@ -360,6 +371,13 @@ function typeIcon(type) {
   flex-direction: column;
   gap: 12px;
   position: relative;
+  /* 毛玻璃背景：防止卡通底图上的文字/卡片看不清 */
+  margin: 8px;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--glass-border);
 }
 .top-bar {
   display: flex;

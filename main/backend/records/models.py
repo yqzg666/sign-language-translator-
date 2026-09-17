@@ -15,3 +15,35 @@ class TranslationRecord(models.Model):
 
     def __str__(self):
         return f"[{self.created_at:%Y-%m-%d %H:%M}] {self.video_name}"
+
+
+
+
+class MaterialFolder(models.Model):
+    name = models.CharField(max_length=120)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "素材文件夹"
+        verbose_name_plural = "素材文件夹"
+
+    def __str__(self):
+        return self.name
+
+
+class Material(models.Model):
+    folder = models.ForeignKey("MaterialFolder", related_name="materials", on_delete=models.CASCADE)
+    type = models.CharField(max_length=30, blank=True, default="text")
+    name = models.CharField(max_length=200)
+    content = models.TextField(blank=True, default="")
+    url = models.CharField(max_length=500, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "素材"
+        verbose_name_plural = "素材"
+
+    def __str__(self):
+        return self.name

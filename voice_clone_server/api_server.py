@@ -169,7 +169,34 @@ class VoiceCloneEngine:
             print(f"[音色克隆] 模型加载失败: {e}")
             return False
 
-    def clone_voice(self, ref_audio_path, ref_text, target_text):
+    # 不同克隆音色 → 不同 edge-tts 音色映射（fallback 时使用）
+    VOICE_TO_EDGE_TTS = {
+        # 用户自定义克隆音色默认映射到不同 edge-tts 音色，确保听起来有区别
+        # 用哈希取模来分配，使不同 name 映射到不同音色
+    }
+
+    @staticmethod
+    def _pick_edge_voice(voice_name):
+        """根据 voice_name 选择一个 edge-tts 音色（确定性映射）"""
+        edge_voices = [
+            "zh-CN-XiaoxiaoNeural",   # 0 温柔女声
+            "zh-CN-YunxiNeural",      # 1 阳光男声
+            "zh-CN-YunjianNeural",    # 2 自信男声
+            "zh-CN-XiaoyiNeural",     # 3 可爱女声
+            "zh-CN-YunyangNeural",    # 4 成熟男声
+            "zh-CN-XiaochenNeural",   # 5 清新女声
+            "zh-CN-XiaohanNeural",    # 6 知性女声
+            "zh-CN-XiaomengNeural",   # 7 活泼女声
+            "zh-CN-XiaoruiNeural",    # 8 柔和女声
+            "zh-CN-YunfengNeural",    # 9 深沉男声
+        ]
+        if not voice_name:
+            return edge_voices[0]
+        # 用 voice_name 的哈希值确定索引，保证同个名称始终映射到同个音色
+        idx = hash(voice_name) % len(edge_voices)
+        return edge_voices[idx]
+
+    def clone_voice(self, ref_audio_path, ref_text, target_text, voice_name=None):
         """
         零样本音色克隆
 
@@ -177,6 +204,7 @@ class VoiceCloneEngine:
             ref_audio_path: 参考音频路径（3-10 秒，16kHz，单声道）
             ref_text: 参考音频对应的文本
             target_text: 目标合成文本
+            voice_name: 音色名称（用于 fallback 时选择不同音色）
 
         返回:
             合成音频路径，或 None（失败时）
@@ -189,17 +217,18 @@ class VoiceCloneEngine:
         gpt_sovits_api = "http://127.0.0.1:9870"
         try:
             import requests
-            # GPT-SoVITS v2 API 格式
+            # GPT-SoVITS v2 API 格式（api_v2.py）
             payload = {
+                "text": target_text,
+                "text_lang": "zh",
                 "ref_audio_path": ref_audio_path,
-                "ref_text": ref_text,
-                "target_text": target_text,
-                "target_lang": "zh",  # 中文
+                "prompt_text": ref_text,
+                "prompt_lang": "zh",
             }
             resp = requests.post(
                 f"{gpt_sovits_api}/tts",
                 json=payload,
-                timeout=60,
+                timeout=120,
             )
             if resp.status_code == 200:
                 output_name = f"clone_{uuid.uuid4().hex[:8]}.wav"
@@ -208,30 +237,34 @@ class VoiceCloneEngine:
                     f.write(resp.content)
                 print(f"[音色克隆] 合成成功: {output_path}")
                 return str(output_path)
+            else:
+                print(f"[proxy_debug] GPT-SoVITS 返回非200: status={resp.status_code}, body={resp.text[:300]}")
         except requests.exceptions.ConnectionError:
             print("[音色克隆] GPT-SoVITS API 未响应，使用 fallback 模式")
         except Exception as e:
             print(f"[音色克隆] API 调用失败: {e}")
 
-        # Fallback: 生成一个提示音频（演示用）
-        return self._fallback_tts(ref_text, target_text, ref_audio_path)
+        # Fallback: 使用 edge-tts，根据 voice_name 选择不同音色
+        return self._fallback_tts(ref_text, target_text, ref_audio_path, voice_name)
 
-    def _fallback_tts(self, ref_text, target_text, ref_audio_path):
+    def _fallback_tts(self, ref_text, target_text, ref_audio_path, voice_name=None):
         """
         降级方案：当 GPT-SoVITS 不可用时使用 edge-tts
+        根据 voice_name 选择不同的 edge-tts 音色，使不同克隆音色听起来有区别
         返回合成的音频路径
         """
+        edge_voice = self._pick_edge_voice(voice_name)
         output_name = f"fallback_{uuid.uuid4().hex[:8]}.mp3"
         output_path = OUTPUT_DIR / output_name
         try:
             import asyncio
             import edge_tts
             asyncio.run(
-                edge_tts.Communicate(target_text, "zh-CN-XiaoxiaoNeural").save(
+                edge_tts.Communicate(target_text, edge_voice).save(
                     str(output_path)
                 )
             )
-            print(f"[音色克隆] Fallback TTS 合成: {output_path}")
+            print(f"[音色克隆] Fallback TTS 合成 (音色={edge_voice}): {output_path}")
             return str(output_path)
         except Exception as e:
             print(f"[音色克隆] Fallback 失败: {e}")
@@ -271,11 +304,13 @@ def clone_voice():
     # 获取参数
     ref_text = ""
     target_text = ""
+    voice_name = None
 
     if request.content_type and "multipart" in request.content_type:
         # multipart 上传
         ref_text = request.form.get("ref_text", "").strip()
         target_text = request.form.get("target_text", "").strip()
+        voice_name = request.form.get("voice_name", "").strip() or None
         audio_file = request.files.get("audio")
 
         if not audio_file:
@@ -291,8 +326,11 @@ def clone_voice():
         data = request.get_json(force=True)
         ref_text = data.get("ref_text", "").strip()
         target_text = data.get("target_text", "").strip()
+        voice_name = data.get("voice_name", "").strip() or None
         ref_audio_path = data.get("ref_audio_path", "").strip()
+        print(f"[proxy_debug] JSON body: ref_text={ref_text!r}, target_text={target_text!r}, voice_name={voice_name!r}, ref_audio_path={ref_audio_path!r}")
         if not ref_audio_path or not os.path.exists(ref_audio_path):
+            print(f"[proxy_debug] ref_audio_path INVALID: exists={os.path.exists(ref_audio_path) if ref_audio_path else 'N/A'}")
             return jsonify({"error": "参考音频路径无效"}), 400
 
     if not ref_text:
@@ -301,7 +339,7 @@ def clone_voice():
         return jsonify({"error": "请提供目标合成文本 (target_text)"}), 400
 
     # 执行克隆
-    output_path = engine.clone_voice(ref_audio_path, ref_text, target_text)
+    output_path = engine.clone_voice(ref_audio_path, ref_text, target_text, voice_name=voice_name)
 
     if not output_path or not os.path.exists(output_path):
         return jsonify({"error": "语音合成失败"}), 500

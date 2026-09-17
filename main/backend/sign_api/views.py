@@ -127,7 +127,7 @@ def recognize_sign(request):
 
     try:
         print(f"[recognize_sign] 开始处理视频: {full_path_str}")
-        frames = extract_frames_from_video(full_path_str)
+        frames = extract_frames_from_video(full_path_str, drop_every=4)
         print(f"[recognize_sign] 提取帧数: {len(frames)}")
         gloss_list, raw_text = recognize_frames(model, frames, idx2word, _MODEL_CACHE["device"])
         gloss_text = " / ".join(word for word, _ in gloss_list) if gloss_list else raw_text
@@ -427,7 +427,7 @@ def translate_video(request):
     from inference import extract_frames_from_video, recognize_frames
 
     try:
-        frames = extract_frames_from_video(video_path)
+        frames = extract_frames_from_video(video_path, drop_every=4)
         gloss_list, raw_text = recognize_frames(model, frames, idx2word, _MODEL_CACHE["device"])
         gloss_text = " / ".join(word for word, _ in gloss_list) if gloss_list else raw_text
 
@@ -487,7 +487,7 @@ def _translate_stream(request):
         from inference import extract_frames_from_video, recognize_frames
 
         yield event({"progress": 20, "status": "正在提取视频帧..."})
-        frames = extract_frames_from_video(video_path)
+        frames = extract_frames_from_video(video_path, drop_every=4)
         total_frames = len(frames)
 
         yield event({"progress": 35, "status": f"TFNet 识别手语中（{total_frames} 帧）..."})
@@ -560,8 +560,30 @@ _DUB_VOICES = {
     "zh": "zh-CN-XiaoxiaoNeural",
     "en": "en-US-AriaNeural",
     "yue": "zh-HK-HiuGaaiNeural",  # 粤语
-    "ja": "ja-JP-NanamiNeural",
 }
+
+
+def _pick_edge_voice_for_clone(voice_name):
+    """
+    根据克隆音色名称选择不同的 edge-tts 音色
+    使得在 GPT-SoVITS 不可用的情况下，不同克隆音色听起来也有区别
+    """
+    edge_voices = [
+        "zh-CN-XiaoxiaoNeural",   # 0 温柔女声
+        "zh-CN-YunxiNeural",      # 1 阳光男声
+        "zh-CN-YunjianNeural",    # 2 自信男声
+        "zh-CN-XiaoyiNeural",     # 3 可爱女声
+        "zh-CN-YunyangNeural",    # 4 成熟男声
+        "zh-CN-XiaochenNeural",   # 5 清新女声
+        "zh-CN-XiaohanNeural",    # 6 知性女声
+        "zh-CN-XiaomengNeural",   # 7 活泼女声
+        "zh-CN-XiaoruiNeural",    # 8 柔和女声
+        "zh-CN-YunfengNeural",    # 9 深沉男声
+    ]
+    if not voice_name:
+        return edge_voices[0]
+    idx = hash(voice_name) % len(edge_voices)
+    return edge_voices[idx]
 
 
 @api_view(["POST"])
@@ -656,6 +678,7 @@ def serve_dub_audio(request, filename):
     resp = HttpResponse(data, content_type="audio/mpeg")
     resp["Content-Length"] = str(file_size)
     resp["Access-Control-Allow-Origin"] = "*"
+    resp["Content-Disposition"] = f'inline; filename="{filename}"'
     return resp
 
 
@@ -835,6 +858,7 @@ def dub_video_v2(request):
                 "ref_audio_path": ref_audio_path,
                 "ref_text": ref_text,
                 "target_text": text,
+                "voice_name": voice_name,
             }
 
             resp = http_requests.post(
@@ -842,6 +866,8 @@ def dub_video_v2(request):
                 json=payload,
                 timeout=60,
             )
+            import logging as _lg
+            _lg.getLogger().warning(f"[dub_v2_debug] proxy status={resp.status_code}, content_type={resp.headers.get('content-type','')[:30]}, size={len(resp.content)}, body={resp.text[:200]}")
             if resp.status_code == 200:
                 # 保存返回的音频
                 safe = hashlib.md5((text + "clone").encode()).hexdigest()[:12]
@@ -882,7 +908,11 @@ def dub_video_v2(request):
             # 克隆失败，回退 edge-tts
 
     # ===== 回退：使用 edge-tts =====
-    voice = _DUB_VOICES.get(language, "zh-CN-XiaoxiaoNeural")
+    if use_clone and voice_name:
+        # 原本要使用克隆音色但克隆失败 → 根据 voice_name 选不同的 edge-tts 音色
+        voice = _pick_edge_voice_for_clone(voice_name)
+    else:
+        voice = _DUB_VOICES.get(language, "zh-CN-XiaoxiaoNeural")
 
     # 跨语言翻译
     target_text = text
@@ -921,4 +951,249 @@ def dub_video_v2(request):
         "audio_url": audio_url,
         "duration": duration,
         "clone": False,
+    })
+
+
+# ─── 手语斩词库（背词模块）─────────────────────────────────
+
+def _normalize_gloss_word(word):
+    """去掉 Gloss 词的数字编号后缀与标点：合适2 -> 合适；纯数字/标点/符号 -> 空"""
+    import re
+    w = word.strip()
+    # 去末尾数字编号（合适2 -> 合适）
+    w = re.sub(r"\d+$", "", w)
+    # 去除常见标点（含中文破折号、连字符、斜杠、书名号、空格等）
+    w = w.strip("。，？！、,.?!；;：:「」『』（）()［］[]【】《》<>-—–~～/\\_·•\u3000 ")
+    # 过滤纯数字 / 空
+    if not w or w.isdigit():
+        return ""
+    # 过滤纯符号词（不含中文或字母，如 "—" "/" "?"），避免题库出现脏选项
+    if not re.search(r"[\u4e00-\u9fa5A-Za-z]", w):
+        return ""
+    return w
+
+
+def _extract_vocab_words():
+    """从 train/dev/test 的 Gloss 序列提取去重词汇，并为每个词挑选最佳对照记录。
+    Returns: { norm_word: {"record":..., "raw_word":..., "score":...} }
+    """
+    from text_to_sign.sentence_index import _load_records
+
+    records = _load_records()
+    best = {}
+    for r in records:
+        gloss_words = [g.strip() for g in r["gloss"].split("/") if g.strip()]
+        for pos, raw in enumerate(gloss_words):
+            norm = _normalize_gloss_word(raw)
+            if not norm:
+                continue
+            # 词位置越靠前、句子越短，该记录的对照效果越好
+            score = 1.0 / (pos + 1) * (1.0 / len(gloss_words))
+            cur = best.get(norm)
+            if cur is None or score > cur["score"]:
+                best[norm] = {"record": r, "raw_word": raw, "score": score}
+    return best
+
+
+def _seed_words():
+    """从数据集 Gloss 提取手语词汇并写入词库（幂等）"""
+    from .models import SignWord
+
+    vocab = _extract_vocab_words()
+    if not vocab:
+        print("[sign_api] 数据集词汇提取为空")
+        return
+    existing = set(SignWord.objects.values_list("word", flat=True))
+    to_add = [SignWord(word=w) for w in vocab if w not in existing]
+    if to_add:
+        SignWord.objects.bulk_create(to_add, ignore_conflicts=True)
+    print(f"[sign_api] 已从数据集提取手语词库: {len(vocab)} 个词")
+
+
+def _request_text_to_sign(text):
+    """调用内部 text-to-sign 接口生成手语视频，返回 dict（video_url 等），失败抛异常"""
+    import json as json_mod
+    from urllib.request import Request as URLRequest, urlopen
+
+    payload = json_mod.dumps({"text": text}).encode("utf-8")
+    req = URLRequest("http://127.0.0.1:8000/api/text-to-sign/", data=payload, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(req, timeout=60) as resp:
+            return json_mod.loads(resp.read().decode("utf-8"))
+    except Exception:
+        # 检索失败 → 尝试视频拼接兜底
+        payload2 = json_mod.dumps({"text": text, "stitch": True}).encode("utf-8")
+        req2 = URLRequest("http://127.0.0.1:8000/api/text-to-sign/stitch/", data=payload2, method="POST")
+        req2.add_header("Content-Type", "application/json")
+        with urlopen(req2, timeout=120) as resp2:
+            return json_mod.loads(resp2.read().decode("utf-8"))
+
+
+def _generate_sign_description(word):
+    """复用 DeepSeek（杏云同学）生成手语动作文字要领"""
+    prompt = (
+        f"请用简洁中文描述中国手语（CSL）中「{word}」这个词汇的手语动作要领，"
+        "包括手指、手掌、手臂的动作与方向，控制在60字以内。只输出动作描述。"
+    )
+    system_prompt = "你是中国手语教学专家，用中文清晰描述手语动作要领，只输出动作描述。"
+    try:
+        return _call_deepseek(prompt, system_prompt, temperature=0.4, max_tokens=200)
+    except RuntimeError:
+        return ""
+
+
+def _sign_word_payload(obj):
+    return {
+        "id": obj.id,
+        "word": obj.word,
+        "pinyin": obj.pinyin,
+        "video_url": obj.video_url,
+        "description": obj.description,
+        "generated": obj.generated,
+    }
+
+
+@api_view(["GET"])
+def list_sign_words(request):
+    """手语词库列表 GET /api/vocab/list → { words: [...] }"""
+    from .models import SignWord
+
+    words = [_sign_word_payload(w) for w in SignWord.objects.all()]
+    return Response({"words": words})
+
+
+@api_view(["GET"])
+def get_sign_word(request, pk):
+    """单个词详情 GET /api/vocab/<pk>/ """
+    from .models import SignWord
+
+    try:
+        obj = SignWord.objects.get(pk=pk)
+    except SignWord.DoesNotExist:
+        return Response({"error": "词不存在"}, status=status.HTTP_404_NOT_FOUND)
+    return Response(_sign_word_payload(obj))
+
+
+@api_view(["POST"])
+def generate_sign_word(request, pk):
+    """首次生成该词的手语视频 + 文字说明，并缓存 POST /api/vocab/<pk>/generate"""
+    from .models import SignWord
+
+    try:
+        obj = SignWord.objects.get(pk=pk)
+    except SignWord.DoesNotExist:
+        return Response({"error": "词不存在"}, status=status.HTTP_404_NOT_FOUND)
+
+    # 已生成：直接返回缓存
+    if obj.generated and obj.video_url:
+        return Response(_sign_word_payload(obj))
+
+    # 1. 手语视频（检索/拼接，内部 HTTP 至 text-to-sign）
+    video_url = ""
+    try:
+        result = _request_text_to_sign(obj.word)
+        video_url = result.get("video_url") or result.get("videoUrl") or ""
+    except Exception as exc:  # noqa: BLE001
+        print(f"[sign_api] 词「{obj.word}」视频生成失败: {exc}")
+
+    # 2. 手语动作文字说明（DeepSeek）
+    if not obj.description:
+        obj.description = _generate_sign_description(obj.word)
+
+    obj.video_url = video_url
+    obj.generated = True
+    obj.save()
+
+    return Response(_sign_word_payload(obj))
+
+
+def _preload_vocab(limit=None):
+    """为未生成视频的词，用 TFNet 从整句视频裁剪出单词语视频并打标签。
+    复用 text_to_sign 的定位/裁剪/拼接能力。返回成功生成的词数。
+    """
+    import re
+    import time as time_mod
+    from .models import SignWord
+    from text_to_sign.views import _locate_and_clip_segment, _stitch_video_segments, VIDEO_BASE
+
+    vocab = _extract_vocab_words()
+    qs = SignWord.objects.filter(generated=False).order_by("id")
+    if limit and limit > 0:
+        qs = qs[: int(limit)]
+
+    out_dir = VIDEO_BASE / "generated" / "vocab"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    done = 0
+    total = qs.count()
+    for idx, sw in enumerate(qs, 1):
+        info = vocab.get(sw.word)
+        if not info:
+            continue  # 数据集无此词，交由 generate 接口兜底
+        path = info["record"]["video_path"]
+        if not os.path.exists(path):
+            continue
+        raw = info["raw_word"]  # 用带编号的原始词定位，命中词表更准
+        try:
+            seg = _locate_and_clip_segment(path, raw)
+            if not seg:
+                continue
+            safe = re.sub(r"[^\w\u4e00-\u9fa5]", "_", sw.word)
+            out_name = f"vocab_{safe}_{int(time_mod.time())}.mp4"
+            out_path = out_dir / out_name
+            if _stitch_video_segments([seg], out_path):
+                sw.video_url = f"/video/generated/vocab/{out_name}"
+                sw.generated = True
+                if not sw.description:
+                    sw.description = _generate_sign_description(sw.word)
+                sw.save()
+                done += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sign_api] 词「{sw.word}」裁剪失败: {exc}")
+        if idx % 10 == 0 or idx == total:
+            print(f"[sign_api] 预加载进度: {idx}/{total}（已生成 {done}）")
+    return done
+
+
+# 预加载状态（供前端「扩充词库」轮询）
+_PRELOAD_STATE = {"running": False, "done": 0, "limit": 0, "error": ""}
+
+
+@api_view(["POST"])
+def preload_sign_words(request):
+    """批量预加载：后台线程用 TFNet 裁剪下一批单词语视频
+    POST /api/vocab/preload  { limit } → { running, done }
+    """
+    try:
+        limit = int(request.data.get("limit", 80) or 80)
+    except (TypeError, ValueError):
+        limit = 80
+
+    if _PRELOAD_STATE["running"]:
+        return Response({"running": True, "done": _PRELOAD_STATE["done"]})
+
+    import threading
+    _PRELOAD_STATE.update(running=True, done=0, limit=limit, error="")
+
+    def run():
+        try:
+            _PRELOAD_STATE["done"] = _preload_vocab(limit)
+        except Exception as exc:  # noqa: BLE001
+            _PRELOAD_STATE["error"] = str(exc)
+        finally:
+            _PRELOAD_STATE["running"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return Response({"running": True, "done": 0})
+
+
+@api_view(["GET"])
+def preload_sign_words_state(request):
+    """查询预加载状态 GET /api/vocab/preload-state → { running, done, limit, error }"""
+    return Response({
+        "running": _PRELOAD_STATE["running"],
+        "done": _PRELOAD_STATE["done"],
+        "limit": _PRELOAD_STATE["limit"],
+        "error": _PRELOAD_STATE["error"],
     })

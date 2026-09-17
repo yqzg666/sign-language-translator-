@@ -274,17 +274,32 @@ export const voiceApi = {
  * 我的素材（暂未对接后端，保留 Mock）
  * ========================================================================== */
 export const materialsApi = {
-  async listFolders() { return { folders: [] } },
-  async createFolder(name) { return { id: 'f_' + Date.now(), name, createdAt: '' } },
-  async renameFolder(id, name) { return { success: true } },
-  async deleteFolders(ids) { return { success: true } },
-  async listMaterials(folderId) { return { materials: [] } },
-  async createMaterial(folderId, data) { return { id: 'm_' + Date.now() } },
-  async uploadMaterial(folderId, type, name, file) { return { id: 'm_' + Date.now(), url: URL.createObjectURL(file) } },
-  async renameMaterial(materialId, name) { return { success: true } },
-  async updateMaterialContent(materialId, content) { return { success: true } },
-  async deleteMaterials(ids) { return { success: true } },
-  async moveMaterials(ids, toFolderId) { return { success: true } }
+  async listFolders() { return request('GET', '/materials/folders') },
+  async createFolder(name) { return request('POST', '/materials/folders', { name }) },
+  async renameFolder(id, name) { return request('PATCH', `/materials/folders/${id}`, { name }) },
+  async deleteFolders(ids) { return request('DELETE', '/materials/folders', { ids }) },
+  async listMaterials(folderId) { return request('GET', `/materials/?folderId=${folderId}`) },
+  async createMaterial(folderId, data) { return request('POST', '/materials/', { folder_id: folderId, ...data }) },
+  async uploadMaterial(folderId, type, name, file) {
+    const token = localStorage.getItem('sl_token') || ''
+    const form = new FormData()
+    form.append('file', file)
+    form.append('name', name || file.name)
+    form.append('type', type || 'file')
+    form.append('folder_id', folderId)
+    const res = await fetch(`${BASE_URL}/materials/upload`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: form
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || '上传失败')
+    return data
+  },
+  async renameMaterial(materialId, name) { return request('PATCH', `/materials/${materialId}`, { name }) },
+  async updateMaterialContent(materialId, content) { return request('PATCH', `/materials/${materialId}`, { content }) },
+  async deleteMaterials(ids) { return request('DELETE', '/materials/', { ids }) },
+  async moveMaterials(ids, toFolderId) { return request('POST', '/materials/move', { ids, to_folder_id: toFolderId }) }
 }
 
 /* ==========================================================================
@@ -318,5 +333,62 @@ export const userApi = {
    */
   async deleteAccount() {
     return request('DELETE', '/user/account')
+  }
+}
+
+/* ==========================================================================
+ * 手语斩（背词模块）
+ * ========================================================================== */
+export const vocabApi = {
+  /**
+   * 手语词库列表 GET /api/vocab/list → { words: [...] }
+   */
+  async list() {
+    return request('GET', '/vocab/list')
+  },
+
+  /**
+   * 单个词详情 GET /api/vocab/{id}/
+   */
+  async get(id) {
+    return request('GET', `/vocab/${id}/`)
+  },
+
+  /**
+   * 首次生成该词的手语视频 + 文字说明（服务端缓存）
+   * POST /api/vocab/{id}/generate → { id, word, pinyin, video_url, description, generated }
+   */
+  async generate(id) {
+    return request('POST', `/vocab/${id}/generate`)
+  },
+
+  /**
+   * 批量预加载：后台裁剪下一批单词语视频
+   * POST /api/vocab/preload  { limit } → { running, done }
+   */
+  async preload(limit = 80) {
+    return request('POST', '/vocab/preload', { limit })
+  },
+
+  /**
+   * 查询批量预加载状态
+   * GET /api/vocab/preload-state → { running, done, limit, error }
+   */
+  async preloadStatus() {
+    return request('GET', '/vocab/preload-state')
+  }
+}
+
+
+export const recordsApi = {
+  async list(page = 1, pageSize = 20) {
+    return request('GET', `/records/?page=${page}&page_size=${pageSize}`)
+  },
+  async remove(id) {
+    const token = localStorage.getItem('sl_token') || ''
+    const res = await fetch(`${BASE_URL}/records/${encodeURIComponent(id)}/`, { method: 'DELETE', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(d.error || '删除失败')
+    return true
   }
 }

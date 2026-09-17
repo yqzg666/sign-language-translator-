@@ -3,6 +3,8 @@
 输入: 视频/图片序列 → TFNet → Gloss 序列 → 中文文本
 """
 import os
+import shutil
+import subprocess
 import sys
 import cv2
 import torch
@@ -118,22 +120,69 @@ def pad_sequence(frames_tensor, left_pad=6, total_stride=4):
     return padded, feat_len
 
 
-def extract_frames_from_video(video_path, sample_rate=1):
-    """从视频文件中提取帧"""
+def _find_ffmpeg():
+    """定位可用的 FFmpeg 可执行文件（优先 imageio-ffmpeg 自带二进制）"""
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def extract_frames_from_video(video_path, sample_rate=1, drop_every=0):
+    """
+    从视频文件中提取帧
+
+    优先用 FFmpeg 解码并直接缩放到 256x256（与 preprocess_frames 的目标尺寸一致），
+    再输出 RGB 原始帧，避免全分辨率解码 + 逐帧颜色转换的开销；失败时回退到 OpenCV。
+
+    Args:
+        sample_rate: 每隔 sample_rate 帧保留 1 帧（整数降采样，缺省 1 表示全抽）
+        drop_every: 每 drop_every 帧丢弃 1 帧（保留每组的其余帧），
+                    例如 drop_every=3 表示 3 取 2，drop_every=4 表示 4 取 3，
+                    drop_every=2 表示 2 取 1。设为 0 时仅按 sample_rate 降采样。
+    """
+    target_w, target_h = 256, 256  # 与 preprocess_frames 的 resize 目标一致
+
+    try:
+        ffmpeg = _find_ffmpeg()
+        cmd = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-vsync", "0",
+            "-i", str(video_path),
+            "-vf", f"scale={target_w}:{target_h},format=rgb24",
+            "-f", "rawvideo", "pipe:1",
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode == 0 and proc.stdout:
+            arr = np.frombuffer(proc.stdout, dtype=np.uint8).reshape(-1, target_h, target_w, 3)
+            keep = [
+                i for i in range(arr.shape[0])
+                if not (
+                    (sample_rate > 1 and i % sample_rate != 0)
+                    or (0 < drop_every and i % drop_every == drop_every - 1)
+                )
+            ]
+            return [arr[i] for i in keep]
+    except Exception:
+        pass  # 回退到 OpenCV 逐帧读取
+
     cap = cv2.VideoCapture(video_path)
     frames = []
     frame_idx = 0
-    
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        if frame_idx % sample_rate == 0:
+        skip = (sample_rate > 1 and frame_idx % sample_rate != 0) or \
+               (0 < drop_every and frame_idx % drop_every == drop_every - 1)
+        if not skip:
             # BGR -> RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frames.append(frame_rgb)
         frame_idx += 1
-    
+
     cap.release()
     return frames
 

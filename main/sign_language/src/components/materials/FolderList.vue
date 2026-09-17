@@ -85,15 +85,20 @@ function openRename(id, name) {
 }
 
 // 提交新建/重命名
-function submitInput() {
+async function submitInput() {
   if (!inputName.value.trim()) {
     inputError.value = '名称不能为空'
     return
   }
-  if (inputMode.value === 'create') {
-    store.addFolder(inputName.value)
-  } else {
-    store.renameFolder(inputTargetId.value, inputName.value)
+  try {
+    if (inputMode.value === 'create') {
+      await store.addFolder(inputName.value)
+    } else {
+      await store.renameFolder(inputTargetId.value, inputName.value)
+    }
+  } catch (e) {
+    inputError.value = e.message || '操作失败'
+    return
   }
   inputVisible.value = false
 }
@@ -170,7 +175,7 @@ function doDelete() {
         <div class="folder-info">
           <p class="folder-name">{{ f.name }}</p>
           <p class="folder-meta">{{ f.createdAt }}</p>
-          <p class="folder-meta">{{ f.materials.length }} 个素材</p>
+          <p class="folder-meta">{{ f.materialsCount ?? f.materials.length }} 个素材</p>
         </div>
         <!-- 非管理模式下的单卡操作 -->
         <div v-if="!manageMode" class="card-actions" @click.stop>
@@ -182,7 +187,7 @@ function doDelete() {
 
     <!-- 空状态 -->
     <div v-else class="empty-state">
-      <span class="empty-icon">🗂️</span>
+      <img src="/bg/folder-empty.png" class="empty-icon" alt="" />
       <p class="empty-title">还没有文件夹</p>
       <p class="empty-desc">点击上方「新建文件夹」开始整理你的素材</p>
     </div>
@@ -235,6 +240,13 @@ function doDelete() {
   flex-direction: column;
   gap: 12px;
   position: relative;
+  /* 毛玻璃背景：防止卡通底图上的文字/卡片看不清 */
+  margin: 8px;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--glass-border);
 }
 .top-bar {
   display: flex;
@@ -344,7 +356,9 @@ function doDelete() {
   color: var(--text-secondary);
 }
 .empty-icon {
-  font-size: 56px;
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
 }
 .empty-title {
   font-size: 16px;

@@ -16,4 +16,10 @@ urlpatterns = [
     path("voice/references", views.list_voice_references, name="list_voice_references"),
     path("voice/references/<str:voice_name>", views.delete_voice_reference, name="delete_voice_reference"),
     path("voice/audio/<str:voice_name>/<str:filename>", views.serve_voice_audio, name="serve_voice_audio"),
+    # 手语斩词库（背词模块）
+    path("vocab/list", views.list_sign_words, name="list_sign_words"),
+    path("vocab/<int:pk>/", views.get_sign_word, name="get_sign_word"),
+    path("vocab/<int:pk>/generate", views.generate_sign_word, name="generate_sign_word"),
+    path("vocab/preload", views.preload_sign_words, name="preload_sign_words"),
+    path("vocab/preload-state", views.preload_sign_words_state, name="preload_sign_words_state"),
 ]

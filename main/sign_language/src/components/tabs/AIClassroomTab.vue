@@ -285,7 +285,7 @@ onMounted(() => {
             </video>
             <div v-if="msg.sign.videoInfo" class="sign-video-info">
               <span class="info-label">匹配度</span>
-              <span class="info-val">{{ (msg.sign.videoInfo.similarity * 100).toFixed(1) }}%</span>
+              <span class="info-val">{{ (msg.sign.videoInfo.method === 'stitch' ? 100 : msg.sign.videoInfo.similarity * 100).toFixed(1) }}%</span>
               <span class="info-label">方式</span>
               <span class="info-val method-tag" :class="msg.sign.videoInfo.method">{{ _methodLabel(msg.sign.videoInfo.method) }}</span>
             </div>
@@ -311,11 +311,10 @@ onMounted(() => {
       <button
         class="mic-icon btn-press"
         :class="{ recording }"
+        :style="{ backgroundImage: 'url(/bg/mic.png)' }"
         @click="toggleMic"
         aria-label="语音输入"
-      >
-        🎤
-      </button>
+      ></button>
       <input
         v-model="inputText"
         class="chat-input"
@@ -505,18 +504,20 @@ onMounted(() => {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.7);
-  font-size: 18px;
+  background-color: rgba(255, 255, 255, 0.7);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   cursor: pointer;
   transition: background 0.2s;
-  border: none;
+  border: 1px solid var(--glass-border);
+  overflow: hidden;
 }
 .mic-icon.recording {
-  background: var(--gradient-yellow);
   box-shadow: var(--shadow-yellow);
   animation: pulse 1.2s infinite;
 }

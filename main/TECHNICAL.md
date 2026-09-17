@@ -3,81 +3,85 @@
 ## 系统架构
 
 ```
-┌──────────────┐          ┌─────────────────────────────────┐
-│  浏览器      │◀────────→│      Vue 3 前端 (5173)           │
-│  (Chrome/etc)│          │  Vite 代理 /api → Django         │
-│              │          │  Vite 代理 /video → Django        │
-└──────────────┘          └──────────────┬──────────────────┘
+┌──────────────┐          ┌──────────────────────────────────────┐
+│  浏览器      │◀────────→│     Vue 3 前端 (5173)                 │
+│  (Chrome/etc)│          │  Vite 代理 /api → Django             │
+│              │          │  Vite 代理 /video → Django           │
+│              │          │                                      │
+│              │  音色克隆流程（可选）                            │
+│              │  前端录制 → Django(8000)                        │
+│              │    → 克隆代理(9880) → GPT-SoVITS(9870)          │
+└──────────────┘          └──────────────┬───────────────────────┘
                                           │ HTTP / SSE
                                           ▼
 ┌──────────────────────────────────────────────────────────────┐
-│              Django 后端 (8000)                               │
-│  ┌─────────────┐  ┌─────────────┐  ┌──────────────────┐    │
-│  │  sign_api/   │  │ text_to_sign/│  │  records/        │    │
-│  │  识别/生成/  │  │  三级检索    │  │  翻译记录 CRUD   │    │
-│  │  配音/翻译   │  │  + 视频拼接  │  │                  │    │
-│  └──────┬──────┘  └──────┬──────┘  └──────────────────┘    │
-│         │                │                                   │
-│         ▼                ▼                                   │
-│  edge-tts        sentence-transformers                       │
-│  (TTS 配音)      (句向量检索)                                │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  TFNet 推理引擎 (src/inference.py)                    │   │
-│  │  ├─ 帧提取 + 预处理                                    │   │
-│  │  ├─ 手语识别 → Gloss 序列                              │   │
+│              Django 后端 (8000)                                │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
+│  │ sign_api │  │ text_to_ │  │ records  │  │   chat      │  │
+│  │ 识别/生成 │  │ sign     │  │ 翻译记录 │  │ AI 课堂    │  │
+│  │ 配音/音色 │  │ 三阶段   │  │ +素材库  │  │ + Vosk ASR │  │
+│  │ 手语斩词库│  │ 检索+拼接│  │ CRUD     │  │             │  │
+│  └─────┬────┘  └─────┬────┘  └──────────┘  └─────────────┘  │
+│        │              │                                       │
+│        ▼              ▼                                       │
+│  edge-tts       sentence-transformers                         │
+│  (TTS 配音)     (句向量检索)                                  │
+│                                                               │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │  TFNet 推理引擎 (src/inference.py)                     │   │
+│  │  ├─ 帧提取 + 预处理                                     │   │
+│  │  ├─ 手语识别 → Gloss 序列                               │   │
 │  │  └─ 视频词汇定位（拼接用）                              │   │
-│  └──────────────────────────────────────────────────────┘   │
-├──────────────────────────────────────────────────────────────┤
-│  SQLite (db.sqlite3) / 视频文件 (data/video/)                │
-└──────────────────────────────────────────────────────────────┘
+│  └───────────────────────────────────────────────────────┘   │
+├───────────────────────────────────────────────────────────────┤
+│  SQLite (db.sqlite3) / 视频文件 (data/video/)                 │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ## API 文档
 
 所有 API 位于 `http://127.0.0.1:8000/api/`。
 
-### AI 课堂（杏云同学）
+### 手语→文本
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/chat/message` | 发送消息获取 DeepSeek 回复 |
-| POST | `/api/chat/extract-sign` | 从 AI 回复中提取手语关键词 |
-| POST | `/api/chat/speech-to-text` | 语音转文字（Vosk 离线 ASR，multipart WAV） |
+| POST | `/api/sign/recognize` | 识别手语视频/Blob → 文本 |
+| POST | `/api/video/translate` | 上传视频识别手语（非流式，multipart） |
+| POST | `/api/video/translate-stream` | 上传视频识别（SSE 流式进度推送） |
 
-**POST /api/chat/extract-sign** 请求体：
-```json
-{"reply": "手语"你好"是右手五指并拢..."}
-```
+**POST /api/sign/recognize** 支持两种方式：
+
+- 上传文件（multipart `video` 字段）
+- 数据集路径（JSON `{"video_path": "train-00001.mp4"}`）
+
 响应：
 ```json
-{"keyword": "你好"}
+{"result": "你好", "gloss_text": "你 / 好"}
 ```
 
-**POST /api/chat/speech-to-text** （multipart 上传 audio.wav）：
-响应：
-```json
-{"text": "你好"}
-```
+**POST /api/video/translate-stream** 流式推送阶段：
 
-### 翻译记录
+| 进度 | 状态文字 | 说明 |
+|------|---------|------|
+| 5% | 正在加载模型... | TFNet 模型初始化 |
+| 20% | 正在提取视频帧... | OpenCV 逐帧读取 |
+| 35% | TFNet 识别手语中（X 帧）... | 后台线程推理，每 2 秒更新 |
+| 75% | DeepSeek 整理结果中... | LLM 整理 Gloss 为中文 |
+| 95% | 即将完成... | — |
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/records/` | 获取所有翻译记录 |
-| POST | `/api/records/` | 创建翻译记录 |
-| DELETE | `/api/records/:id/` | 删除指定记录 |
-
-**POST /api/records/** 请求体：
+成功结果：
 ```json
 {
-  "video_name": "train-00001.mp4",
-  "gloss_text": "你 / 好 / 。",
-  "chinese_text": "你好。"
+  "progress": 100,
+  "status": "完成!",
+  "type": "result",
+  "translation": "你好，今天天气真好。",
+  "gloss_text": "你 / 好 / 今天 / 天气 / 真 / 好 / 。"
 }
 ```
 
-### 文本→手语（三级检索）
+### 文本→手语（三阶段检索 + 视频拼接）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -111,12 +115,12 @@
 
 ### 视频拼接（兜底）
 
-自动在 generate-stream 中触发，当三级检索全部失败时：
+当三阶段检索全部失败时，generate-stream 自动触发拼接流程：
 
-| 阶段 | 状态文字 | 说明 |
+| 进度 | 状态文字 | 说明 |
 |------|---------|------|
 | 30% | 未找到匹配，正在尝试视频拼接... | 进入拼接流程 |
-| 50% | 正在剪辑视频... | TFNet 逐帧定位+裁剪 |
+| 50% | 正在剪辑视频... | TFNet 逐帧定位 + 裁剪 |
 | 100% | 完成! | 返回拼接视频 URL |
 
 拼接响应示例：
@@ -132,39 +136,20 @@
 }
 ```
 
-### 视频翻译（手语→文本）
+### 视频直出
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/video/translate` | 上传视频识别手语（非流式，multipart） |
-| POST | `/api/video/translate-stream` | 上传视频识别（SSE 流式进度推送） |
+| GET | `/video/<subset>/<translator>/<video_id>` | 返回视频文件 |
 
-**POST /api/video/translate-stream** 流式推送阶段：
-
-| 进度 | 状态文字 | 说明 |
-|------|---------|------|
-| 5% | 正在加载模型... | TFNet 模型初始化 |
-| 20% | 正在提取视频帧... | OpenCV 逐帧读取 |
-| 35% | TFNet 识别手语中（X 帧）... | 后台线程推理，每 2 秒更新 |
-| 75% | DeepSeek 整理结果中... | LLM 整理 Gloss 为中文 |
-| 95% | 即将完成... | — |
-
-成功结果：
-```json
-{
-  "progress": 100,
-  "status": "完成!",
-  "type": "result",
-  "translation": "你好，今天天气真好。",
-  "gloss_text": "你 / 好 / 今天 / 天气 / 真 / 好 / 。"
-}
-```
+支持 HTTP Range 请求（浏览器视频播放、拖动进度条）。
 
 ### 配音生成
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/video/dub` | 文本 → edge-tts 配音音频 |
+| POST | `/api/video/dub` | 文本 → edge-tts 配音（多语种） |
+| POST | `/api/video/dub-v2` | 文本 → 配音（支持音色克隆） |
 | GET | `/api/video/dub-audio/<filename>` | 获取配音 MP3 文件 |
 
 **POST /api/video/dub** 请求体：
@@ -183,31 +168,136 @@
 }
 ```
 
-### 视频直出
+**POST /api/video/dub-v2** 请求体：
+```json
+{"text": "你好，今天天气真好", "language": "zh", "voice_name": "马子欣"}
+```
+
+- `voice_name` 可选：指定已上传的参考音色名称，使用 GPT-SoVITS 真实克隆
+- 不指定或克隆失败时自动回退到 edge-tts
+
+### 音色克隆管理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/video/<subset>/<translator>/<video_id>` | 返回视频文件 |
+| POST | `/api/voice/reference` | 上传参考音频 + 文本（multipart） |
+| GET | `/api/voice/references` | 列出已保存的参考音色 |
+| DELETE | `/api/voice/references/<name>` | 删除指定音色 |
+| GET | `/api/voice/audio/<name>/<filename>` | 获取参考音频文件 |
 
-支持 HTTP Range 请求（浏览器视频播放、拖动进度条）。
-
-### 手语实时识别
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/sign/recognize` | 识别视频/Blob 中的手语 |
-
-支持两种方式：
-- 上传文件（multipart `video` 字段）
-- 数据集路径（JSON `{"video_path": "train-00001.mp4"}`）
-
-### AI 课堂
+### AI 课堂（杏云同学）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/chat/message` | 发送消息获取 DeepSeek 回复 |
 | POST | `/api/chat/extract-sign` | 从 AI 回复中提取手语关键词 |
-| POST | `/api/chat/speech-to-text` | 语音转文字（Vosk 离线 ASR） |
+| POST | `/api/chat/speech-to-text` | 语音转文字（Vosk 离线 ASR，multipart WAV） |
+
+**POST /api/chat/extract-sign** 请求体：
+```json
+{"reply": "手语「你好」是右手五指并拢..."}
+```
+响应：
+```json
+{"keyword": "你好"}
+```
+
+**POST /api/chat/speech-to-text** （multipart 上传 audio.wav）：
+```json
+{"text": "你好"}
+```
+
+### 翻译记录
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/records/` | 获取所有翻译记录（支持分页 `?page=&page_size=`、单条 `?id=tts:5`、按时间倒序、合并两种记录类型） |
+| POST | `/api/records/` | 创建翻译记录 |
+| DELETE | `/api/records/:id/` | 删除指定记录（格式 `stt:<id>` / `tts:<id>`） |
+| DELETE | `/api/records/` | body `{"action":"delete_all"}` 一键清空 |
+
+**POST /api/records/** 请求体：
+```json
+{
+  "video_name": "train-00001.mp4",
+  "gloss_text": "你 / 好 / 。",
+  "chinese_text": "你好。"
+}
+```
+
+列表响应（分页）：
+```json
+{
+  "count": 12,
+  "page": 1,
+  "page_size": 20,
+  "total_pages": 1,
+  "results": [
+    {
+      "id": "tts:5",
+      "type": "文本→手语",
+      "input": "你好",
+      "detail": "你 / 好",
+      "video_name": "xxx.mp4",
+      "video_url": "/video/generated/A/xxx.mp4",
+      "created_at": "2026-09-08 16:00:00"
+    }
+  ]
+}
+```
+
+### 我的素材（MaterialFolder / Material）
+
+「我的素材」为可持久化的素材库，文件夹与素材均存入后端数据库（SQLite），刷新后数据保留。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/materials/folders` | 列出所有文件夹（含 `createdAt`、`materialsCount`） |
+| POST | `/api/materials/folders` | 新建文件夹（body `{name}`） |
+| PATCH | `/api/materials/folders/<id>` | 重命名文件夹（body `{name}`） |
+| DELETE | `/api/materials/folders` | 批量删除文件夹（body `{ids:[...]}`） |
+| GET | `/api/materials/?folderId=<id>` | 列出某文件夹内的素材 |
+| POST | `/api/materials/` | 新建素材（body `{folder_id, type, name, content, url}`） |
+| PATCH | `/api/materials/<id>` | 重命名/更新素材内容（body `{name|content|type}`） |
+| DELETE | `/api/materials/` | 批量删除素材（body `{ids:[...]}`） |
+| POST | `/api/materials/upload` | 上传图片/视频文件（multipart，`file` + `folder_id`） |
+| POST | `/api/materials/move` | 批量移动素材到目标文件夹（body `{ids, to_folder_id}`） |
+
+文件夹响应：
+```json
+{"folders": [{"id":1, "name":"学习", "createdAt":"2026-09-08 16:00:00", "materialsCount":1}]}
+```
+
+素材响应：
+```json
+{"materials": [{"id":1, "folderId":1, "type":"text", "name":"笔记", "content":"...", "url":"", "createdAt":"..."}]}
+```
+
+### 手语斩（背词模块）
+
+词库由服务端从数据集 Gloss 序列自动提取（3560 词左右），每个词绑定独立的手语讲解视频与动作说明，用于百词斩式记手语。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/vocab/list` | 列出所有手语词（`{words:[...]}`） |
+| GET | `/api/vocab/<pk>/` | 单个词详情 |
+| POST | `/api/vocab/<pk>/generate` | 首次生成该词的手语视频 + 动作说明并缓存 |
+| POST | `/api/vocab/preload` | 批量预加载（后台线程用 TFNet 裁剪下一批单词语视频，body `{limit}`，默认 80） |
+| GET | `/api/vocab/preload-state` | 查询预加载状态 `{running, done, limit, error}` |
+
+词卡响应：
+```json
+{
+  "id": 3,
+  "word": "你好",
+  "pinyin": "ni hao",
+  "video_url": "/video/generated/vocab/vocab_你好_1700000000.mp4",
+  "description": "右手伸开，掌心朝外，食指……",
+  "generated": true
+}
+```
+
+未预加载的词在打开词卡时，`generate` 接口会走文本→手语的检索/拼接自动兜底生成，前端「扩充词库」按钮则触发下一批 80 词的后台预加载并实时显示进度。
 
 ### 鉴权
 
@@ -216,6 +306,8 @@
 | POST | `/api/auth/login` | 登录 |
 | POST | `/api/auth/register` | 注册 |
 | POST | `/api/auth/logout` | 退出 |
+
+---
 
 ## 三阶段混合检索 + 拼接兜底
 
@@ -241,7 +333,7 @@
         │     ├─ 送入 TFNet，获取每个时间步对各词汇的置信度
         │     ├─ 提取目标词汇在各时间步的置信度曲线
         │     ├─ 动态阈值（mean+0.5*std）找到高置信连续区间
-        │     └─ 将时间步映射回原始帧序号（步→帧: s*4−6±缓冲15帧）
+        │     └─ 将时间步映射回原始帧序号（步→帧: s*4-6±缓冲15帧）
         ├─ ⑤ 裁剪每个词的片段（H.264）
         └─ ⑥ 拼接 → 输出完整视频
 ```
@@ -259,6 +351,8 @@
 | 动态阈值 | mean+0.5*std | 自适应不同视频的置信度分布 |
 | 近似不返回 | 不匹配则报"暂无" | 翻译需严谨，不让用户困惑 |
 
+---
+
 ## 手语识别流程
 
 ```
@@ -266,7 +360,17 @@
     → TFNet 推理 → Gloss 序列 → DeepSeek 整理中文
 ```
 
+### 抽帧策略
+
+统一使用 `extract_frames_from_video(video_path, sample_rate=1, drop_every=4)`：
+
+- `drop_every=4` 表示每 4 帧丢弃 1 帧（保留其余 3 帧），即 4 取 3。
+- 该策略同时应用于三处：手语识别 `/api/sign/recognize`、视频翻译 `/api/video/translate`、手语斩词库裁剪，保证各模块识别口径一致。
+- 预处理：`Resize(224x224) → CenterCrop → 归一化`（TFNet 输入尺寸）。
+
 支持 SSE 流式进度（`/api/video/translate-stream`）：分阶段推送 加载模型 → 提取帧 → TFNet 识别（多线程，每 2 秒更新）→ DeepSeek 整理 → 完成。
+
+---
 
 ## 配音生成流程
 
@@ -280,6 +384,22 @@
           │
           保存至 data/video/dub/ → 返回音频 URL
 ```
+
+多语种配音流程（v2 支持音色克隆）：
+
+```
+dub-v2 请求
+    │
+    ├─ 有 voice_name → 查找本地参考音频
+    │   ├─ 找到 → 转发至克隆代理 (9880)
+    │   │   ├─ GPT-SoVITS (9870) 可用 → 返回克隆音频
+    │   │   └─ 不可用 → edge-tts fallback（按 voice_name 映射发音人）
+    │   └─ 未找到 → edge-tts 默认音色
+    │
+    └─ 无 voice_name → 直接走 edge-tts
+```
+
+---
 
 ## 句向量索引
 
@@ -295,41 +415,85 @@
 python -m backend.text_to_sign.sentence_index
 ```
 
-## 配置文件说明
+---
+
+## 前端界面与主题
+
+前端采用「卡通角色插画 + 毛玻璃（glassmorphism）」的清新风格，相关实现与资源如下。
+
+### 视觉资源
+
+所有图片资源位于 `sign_language/public/bg/`，通过 Vite 的 `public/` 直接静态访问（如 `/bg/tab-sign.png`）：
+
+| 类别 | 文件 | 用途 |
+|------|------|------|
+| Tab 背景图 | `tab-sign.jpg` / `tab-video.jpg` / `tab-vocab.jpg` / `tab-classroom.jpg` | 各 Tab 整图背景 |
+| 底部导航图标 | `tab-sign.png` / `tab-video.png` / `tab-vocab-icon.jpg` / `tab-classroom.png` | 底部 4 个 Tab 的角色图标 |
+| 顶部按钮图标 | `avatar.png` | 右上角侧边栏/素材入口 |
+| 功能图标 | `mic.png` / `btn-upload.png` / `btn-record.png` / `upload-hero.jpg` / `folder-empty.png` | 麦克风、上传/录制按钮、上传空态、素材空态 |
+
+### 背景切换
+
+`MainView.vue` 中通过 `tabBgMap` 按当前 Tab 选择背景图，并在背景图之上叠一层 `rgba(255,255,255,0.5)` 白色蒙版降低底图浓度，使卡片与文字更清晰：
+
+```js
+const tabBgMap = {
+  sign: '/bg/tab-sign.jpg',
+  video: '/bg/tab-video.jpg',
+  vocab: '/bg/tab-vocab.jpg',
+  classroom: '/bg/tab-classroom.jpg'
+}
+```
+
+- 背景定位：默认 `center bottom`；手语斩、杏云同学两个 Tab 使用 `center 12%` 让角色更靠下展示。
+- 底部导航图标引用带 `?v=N` 版本参数（如 `/bg/tab-sign.png?v=5`），替换图片后递增版本号可强制浏览器刷新缓存。
+
+### 毛玻璃主题
+
+卡片统一使用 `.glass` 类（`styles/global.css`），核心变量：
+
+```css
+:root {
+  --glass-bg: rgba(255, 255, 255, 0.55);        /* 普通毛玻璃卡片 */
+  --glass-bg-strong: rgba(255, 255, 255, 0.68); /* 输入框/较强玻璃 */
+  --glass-border: rgba(255, 255, 255, 0.9);
+  --glass-blur: 14px;                            /* backdrop-filter 模糊半径 */
+}
+```
+
+- `.glass` 类通过 `backdrop-filter: blur(var(--glass-blur))` 实现毛玻璃；
+- 调低 `--glass-bg` 透明度可让底图透出更明显，反之更实；
+- 支持 `data-theme` 切换：`soft`（柔和，默认）/ `bright`（明亮）/ `dark`（深色），三套主题各自覆盖上述变量。
+
+---
+
+## 配置文件
 
 ### requirements.txt
 
-| 依赖 | 版本 | 用途 |
-|------|------|------|
-| torch | ≥2.0.0 | 深度学习框架 |
-| torchvision | ≥0.15.0 | 图像处理 |
-| opencv-python-headless | ≥4.8.0 | 视频/图像处理 |
-| django | ≥5.0 | Web 框架 |
-| djangorestframework | ≥3.15 | REST API |
-| django-cors-headers | ≥4.0 | 跨域支持 |
-| sentence-transformers | ≥3.0 | 语义检索 |
-| imageio | ≥2.35.0 | 视频帧处理 |
-| imageio-ffmpeg | ≥0.6.0 | H.264 编码 |
-| edge-tts | ≥6.0 | 微软 Edge TTS 配音 |
-| mutagen | ≥1.47 | 音频元数据（获取时长） |
-| vosk | ≥0.3.45 | 离线中文语音识别（ASR） |
+见项目根目录的 `requirements.txt`，包含 PyTorch、Django、DRF、sentence-transformers、edge-tts、OpenCV、imageio-ffmpeg 等核心依赖。
 
 ### run_app.bat
 
-启动脚本依次启动两个服务：
+启动脚本依次启动四个服务：
 
-1. `Django` — `python backend/manage.py runserver 0.0.0.0:8000`（新窗口）
-2. `Vue 前端` — `cd sign_language && npm run dev`（新窗口）
+1. **Django 后端** — `python backend/manage.py runserver 0.0.0.0:8000`
+2. **Vue 前端** — `cd sign_language && npm run dev`
+3. **GPT-SoVITS 推理引擎** — `api_v2.py :9870`（可选，文件不存在时自动跳过）
+4. **音色克隆代理** — `api_server.py :9880`（可选，文件不存在时自动跳过）
 
-### 视频自动清理
+后两个服务缺失时不影响系统核心功能（配音回退 edge-tts）。
 
-拼接生成的视频存储在 `data/video/generated/A/`。每次生成新视频前，系统自动删除该目录下所有旧文件，只保留最新一份。
+### 视频/音频文件管理
 
-配音音频存储在 `data/video/dub/`，以 `dub_文本_语言_时间戳.mp3` 格式命名。
+| 类型 | 存储路径 | 说明 |
+|------|---------|------|
+| 拼接视频 | `data/video/generated/A/` | 每次生成前自动清理旧文件 |
+| 配音音频 | `data/video/dub/` | `dub_文本_语言_时间戳.mp3` 命名 |
+| 参考音频 | `../voice_clone_server/ref_audio/<音色名>/` | 用户上传 |
+| 克隆输出 | `../voice_clone_server/output/` | 克隆代理合成结果 |
 
-### 数据集
-
-项目原始数据 `ce_csl/` 与 `main/data/` 完全重复。系统仅使用 `main/data/` 作为唯一数据源。
+---
 
 ## 音色克隆（GPT-SoVITS）
 
@@ -338,46 +502,128 @@ python -m backend.text_to_sign.sentence_index
 ### 架构
 
 ```
-前端录制 → Django 后端 → GPT-SoVITS 服务（9880端口）→ 返回克隆语音
-                │
-                └→ 不可用时回退 edge-tts
+┌──────────┐    ┌──────────┐    ┌─────────────┐    ┌─────────────┐
+│ 前端录制  │ →  │ Django   │ →  │ 克隆代理服务  │ →  │ GPT-SoVITS  │
+│VoiceLib  │    │/dub-v2   │    │:9880/clone  │    │:9870/tts    │
+│rary.vue  │    │(views.py)│    │api_server.py│    │api_v2.py    │
+└──────────┘    └──────────┘    └─────────────┘    └──────┬──────┘
+                                                          │
+                                              ┌───────────▼──────────┐
+                                              │  v2 预训练模型       │
+                                              │  (gsv-v2final-       │
+                                              │   pretrained/)       │
+                                              │  + BERT/HuBERT       │
+                                              │  (自动下载)          │
+                                              └──────────────────────┘
 ```
 
-### 组件
+GPT-SoVITS 不可用时，克隆代理自动回退到 edge-tts（按音色名称哈希映射不同发音人）。
 
-| 组件 | 路径 | 说明 |
-|------|------|------|
-| 音色克隆 API 服务 | `../voice_clone_server/api_server.py` | Flask 服务，零样本音色克隆 |
-| 模型下载工具 | `../voice_clone_server/download_models.py` | 下载 GPT-SoVITS 预训练权重 |
-| 安装脚本 | `../voice_clone_server/setup.py` | 一键安装 + 下载 |
-| 前端语音库 | `VoiceLibrary.vue` | 录音 → 上传 → 选音色配音 |
-| 后端 API | `sign_api/views.py` | 音色管理 + dub-v2 配音接口 |
+### 组件说明
 
-### API 端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/voice/reference` | 上传参考音频 + 文本（multipart） |
-| GET | `/api/voice/references` | 列出已保存的参考音色 |
-| DELETE | `/api/voice/references/<name>` | 删除指定音色 |
-| POST | `/api/video/dub-v2` | v2 配音：支持 voice_name 参数使用克隆音色 |
+| 组件 | 路径 | 端口 | 说明 |
+|------|------|------|------|
+| GPT-SoVITS 推理引擎 | `voice_clone_server/GPT-SoVITS/api_v2.py` | 9870 | FastAPI 服务，加载 v2 模型进行零样本推理 |
+| 克隆代理服务 | `voice_clone_server/api_server.py` | 9880 | Flask 服务，代理请求并处理 fallback |
+| v2 模型文件 | `GPT-SoVITS/GPT_SoVITS/pretrained_models/gsv-v2final-pretrained/` | — | s1bert25hz + s2G2333k.pth |
+| BERT 模型 | 首次启动 `api_v2.py` 时自动下载 | — | chinese-roberta-wwm-ext-large |
+| HuBERT 模型 | 首次启动 `api_v2.py` 时自动下载 | — | chinese-hubert-base |
+| 前端语音库 | `sign_language/src/components/sidebar/VoiceLibrary.vue` | — | 录音 → 上传 → 选音色配音 |
 
 ### 用户操作流程
 
 1. 进入侧边栏「语音库」
 2. 点击「录制」→ 对着麦克风说话（3-10 秒）
 3. 输入刚才说的文本（如"大家好，欢迎使用手语翻译系统"）
-4. 点击「上传并克隆」→ 参考音频保存到后端
+4. 点击「上传」→ 参考音频保存到后端
 5. 在视频翻译 Tab 中，选择「中文」，系统自动使用该克隆音色合成配音
-6. 若 GPT-SoVITS 服务未启动，自动回退到 edge-tts
+6. 若 GPT-SoVITS 服务未启动，自动回退 edge-tts（不同音色名映射不同发音人）
 
 ### 部署要求
 
 - GPU: 推荐 6GB+ 显存（零样本推理约 4GB）
-- 模型文件（~2GB）：gsv-v2-final-pretrained-gpt + sovits
-- 安装：`cd voice_clone_server && python setup.py`
+- 模型文件（~2.5GB）：
+  - v2 权重：s1bert25hz (148MB) + s2G2333k (101MB)
+  - BERT 模型：chinese-roberta-wwm-ext-large (~500MB)
+  - HuBERT 模型：chinese-hubert-base (~400MB)
+- 磁盘空间：建议预留 10GB
+
+### 音色克隆部署步骤
+
+```bash
+# 1. 进入音色克隆服务目录
+cd voice_clone_server
+
+# 2. 安装 Python 依赖
+pip install -r requirements.txt
+
+# 3. 一键启动（GPT-SoVITS 引擎 + 代理服务）
+run_server.bat
+
+# GPT-SoVITS 首次启动会自动下载 BERT/HuBERT 模型，
+# 使用国内镜像可设置环境变量:
+# set HF_ENDPOINT=https://hf-mirror.com
+```
+
+或直接使用 `main/run_app.bat`，该脚本已包含音色克隆服务的启动逻辑。
+
+### 架构说明
+
+- **GPT-SoVITS API（9870 端口）**：实际推理引擎，加载 v2 模型，接收参考音频 + 文本，返回克隆语音
+- **克隆代理（9880 端口）**：中间层，兼容 Django 调用的 API 格式，将请求转换为 GPT-SoVITS 格式，失败时 fallback 至 edge-tts
+- **Django `/api/video/dub-v2`**：前端直接调用的接口，处理参考音频查找、跨语言翻译等业务逻辑
 
 ### 启动
 
-音色克隆服务作为独立进程运行在 9880 端口，由 `start_all.bat` 自动启动。
-若服务未启动，配音功能自动回退到 edge-tts，不影响系统其他功能。
+```bash
+# 独立启动
+cd voice_clone_server
+run_server.bat
+
+# 或随主系统启动（运行 main/run_app.bat 自动包含）
+cd main
+run_app.bat
+```
+
+音色克隆服务作为两个独立进程运行（9870 + 9880 端口）。若 GPT-SoVITS 服务未启动，配音功能自动回退 edge-tts，不影响系统其他功能。
+
+### 已知问题
+
+| 问题 | 解决方案 |
+|------|---------|
+| `jieba_fast` 编译失败 | 替换为 `jieba` 并修改所有导入 |
+| `torchcodec` 缺少 FFmpeg 运行时 | 使用 `soundfile` 补丁（已内置） |
+| BERT/HuBERT 模型国内下载慢 | 使用 `hf-mirror.com` 镜像 |
+| 端口 9870 被占用 | `taskkill /F /PID <pid>` 后重试 |
+| NLTK 资源缺失 | 手动转换 `averaged_perceptron_tagger` 至 JSON 格式 |
+
+---
+
+## TFNet 推理引擎
+
+TFNet 是系统的核心手语识别模型，位于 `src/` 目录。
+
+### 网络结构
+
+- **视觉编码器**：3D ResNet（视频帧序列 → 时空特征）
+- **时序建模**：BiLSTM（双向 LSTM 捕获时序依赖）
+- **注意力**：SENet（通道注意力增强）
+- **输出**：每个时间步对各词汇的预测概率 `logProbs1` shape `(T', 1, vocab_size+1)`
+
+### 推理流程
+
+```
+视频 → 帧提取(OpenCV) → Resize(224x224) → CenterCrop → 归一化
+    → TFNet 前向 → logProbs1 → argmax → Gloss 序列
+    → 去重 → DeepSeek 整理 → 中文文本
+```
+
+### 拼接定位原理
+
+拼接时利用 `logProbs1` 中目标词汇在各时间步的置信度曲线：
+
+1. 提取目标词汇在 `logProbs1` 中所有时间步的概率值
+2. 计算动态阈值：`mean + 0.5 * std`
+3. 找到高于阈值的连续区间
+4. 映射回原始帧序号：`时间步 × 4 - 6 ± 15 帧缓冲`
+5. 裁剪对应视频段 → H.264 拼接
